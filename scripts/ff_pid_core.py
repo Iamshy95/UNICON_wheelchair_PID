@@ -93,8 +93,9 @@ class SimplePredictor:
 
     def __init__(self, horizon=0.5, measured_interval=0.1,
                  integration_dt=0.02, assumed_delay=0.5):
-        if not (0 < integration_dt <= measured_interval < horizon and
-                assumed_delay >= 0):
+        if not all(math.isfinite(float(t)) for t in
+                   (integration_dt, measured_interval, horizon, assumed_delay)) or not (
+                   0 < integration_dt <= measured_interval < horizon and assumed_delay >= 0):
             raise ValueError("invalid predictor timing")
         self.horizon = float(horizon)
         self.measured_interval = float(measured_interval)
@@ -143,22 +144,36 @@ class SimplePredictor:
 
 class FFPD:
     def __init__(self, route, kp=0.3, kd=0.02, ki=0.0,
-                 max_v=0.5, max_w=0.5, wheel_track=0.54,
+                 max_v=0.5, max_w=0.5, wheel_track=0.46,
                  min_wheel=0.30, max_wheel=1.0,
                  lateral_accel=0.25, preview_m=2.0,
-                 cte_deadzone=0.015, d_deadzone=0.0, d_limit=0.15):
+                 cte_deadzone=0.015, d_deadzone=0.0, d_limit=0.15,
+                 prediction_horizon_s=0.5, prediction_measured_s=0.1,
+                 prediction_step_s=0.02, prediction_delay_s=0.5):
         self.route = route
         self.kp, self.kd, self.ki = kp, kd, ki
         self.max_v, self.max_w = max_v, max_w
         self.wheel_track, self.min_wheel, self.max_wheel = wheel_track, min_wheel, max_wheel
         self.lateral_accel, self.preview_m = lateral_accel, preview_m
         self.cte_deadzone, self.d_deadzone, self.d_limit = cte_deadzone, d_deadzone, d_limit
-        self.predictor = SimplePredictor()
+        params = (kp, kd, ki, max_v, max_w, wheel_track, min_wheel,
+                  max_wheel, lateral_accel, preview_m, cte_deadzone,
+                  d_deadzone, d_limit)
+        if not all(math.isfinite(float(p)) for p in params):
+            raise ValueError("controller parameters must be finite")
+        if not (0 <= min_wheel < max_wheel and 0 < max_v <= max_wheel
+                and 0 < max_w and wheel_track > 0 and lateral_accel > 0
+                and preview_m > 0 and cte_deadzone >= 0 and d_deadzone >= 0
+                and d_limit >= 0 and kp >= 0 and kd >= 0 and ki >= 0):
+            raise ValueError("invalid controller tuning parameters")
+        self.predictor = SimplePredictor(
+            horizon=prediction_horizon_s,
+            measured_interval=prediction_measured_s,
+            integration_dt=prediction_step_s,
+            assumed_delay=prediction_delay_s)
         self.station = None
         self.prev_error = None
         self.integral = 0.0
-        if not (0 <= min_wheel < max_wheel and 0 < max_v <= max_wheel and 0 < max_w):
-            raise ValueError("invalid wheel/controller speed parameters")
 
     def reset(self):
         self.station = None

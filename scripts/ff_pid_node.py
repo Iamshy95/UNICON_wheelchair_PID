@@ -21,8 +21,14 @@ from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from std_msgs.msg import Bool, Int16MultiArray, String
 from std_srvs.srv import SetBool, SetBoolResponse
 
-# catkin_install_python may execute a relay script in devel/lib/pid.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# A catkin devel-space relay can run from devel/lib/pid, not scripts/.
+# Resolve the ROS package source directory first, and retain install-space
+# support (where ff_pid_core.py is installed beside this executable).
+pid_scripts = os.path.join(rospkg.RosPack().get_path("pid"), "scripts")
+if os.path.isdir(pid_scripts):
+    sys.path.insert(0, pid_scripts)
+else:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ff_pid_core import FFPD, Route
 
 existing_scripts = os.path.join(
@@ -34,8 +40,40 @@ from route_assets import validate_asset_binding
 from route_mask import RouteMask
 from safety_band import SafetyBand
 
-AUTO_MODE = 65
-TRACK = 0.54
+AUTO_MODE = 65  # Base protocol constant; not a tuning setting.
+
+# ===== FF-PID tuning defaults (also overrideable via ROS ~private params) ====
+# Units are included in names where helpful. Field tuning is NOT yet complete.
+TRACK = 0.46                    # m, same as NUC wheel_cmd_tmp.py
+KP = 0.30                      # P gain for predicted CTE
+KD = 0.02                      # D gain for predicted CTE rate
+MAX_V_MPS = 0.50               # chassis forward speed
+MAX_W_RAD_S = 0.50             # chassis yaw-rate cap
+MIN_WHEEL_MPS = 0.30           # individual driven-wheel speed floor
+MAX_WHEEL_MPS = 1.00           # individual driven-wheel speed ceiling
+MAX_LATERAL_ACCEL_MPS2 = 0.25
+CURVATURE_PREVIEW_M = 2.0
+CTE_DEADZONE_M = 0.015
+D_DEADZONE_MPS = 0.02           # CTE derivative deadzone (m/s)
+D_CLAMP_RAD_S = 0.15           # limit on D's steering contribution
+
+# Predictor horizon and assumed actuator delay are separate quantities.
+PREDICTION_HORIZON_S = 0.50
+PREDICTION_MEASURED_S = 0.10
+PREDICTION_STEP_S = 0.02
+PREDICTION_DELAY_S = 0.50       # hypothesis, not measured delay
+
+# Motion/goal safeguards; changing these also requires validation.
+MAX_CTE_M = 0.40
+MAX_HEADING_ERROR_RAD = 0.50
+GOAL_TOLERANCE_M = 0.40
+STOPPED_WHEEL_THRESHOLD_MPS = 0.06
+STOPPED_REPORTS_TO_FINISH = 3
+MAX_POSE_AGE_S = 0.50
+MAX_WHEEL_AGE_S = 0.35
+MAX_DIAG_AGE_S = 2.0
+CONTROL_PERIOD_S = 0.10
+PEER_CHECK_PERIOD_S = 1.0
 
 
 def read_wheel(data):
@@ -86,26 +124,33 @@ class FFNode:
         # from a simulation or a different machine.
         self.core = FFPD(
             self.route,
-            kp=float(rospy.get_param("~kp", 0.3)),
-            kd=float(rospy.get_param("~kd", 0.02)),
-            ki=0.0,
-            max_v=float(rospy.get_param("~max_v")),
-            max_w=float(rospy.get_param("~max_w", 0.5)),
-            min_wheel=float(rospy.get_param("~min_wheel_mps")),
-            max_wheel=float(rospy.get_param("~max_wheel_mps")),
+            kp=float(rospy.get_param("~kp", KP)),
+            kd=float(rospy.get_param("~kd", KD)),
+            ki=0.0,  # FF-PD, integral deliberately disabled for first trials.
+            max_v=float(rospy.get_param("~max_v", MAX_V_MPS)),
+            max_w=float(rospy.get_param("~max_w", MAX_W_RAD_S)),
+            min_wheel=float(rospy.get_param("~min_wheel_mps", MIN_WHEEL_MPS)),
+            max_wheel=float(rospy.get_param("~max_wheel_mps", MAX_WHEEL_MPS)),
             wheel_track=TRACK,
-            lateral_accel=float(rospy.get_param("~max_lateral_accel", 0.25)),
-            preview_m=float(rospy.get_param("~preview_m", 2.0)))
+            lateral_accel=float(rospy.get_param("~max_lateral_accel", MAX_LATERAL_ACCEL_MPS2)),
+            preview_m=float(rospy.get_param("~preview_m", CURVATURE_PREVIEW_M)),
+            cte_deadzone=float(rospy.get_param("~cte_deadzone_m", CTE_DEADZONE_M)),
+            d_deadzone=float(rospy.get_param("~d_deadzone_mps", D_DEADZONE_MPS)),
+            d_limit=float(rospy.get_param("~d_clamp_rad_s", D_CLAMP_RAD_S)),
+            prediction_horizon_s=float(rospy.get_param("~prediction_horizon_s", PREDICTION_HORIZON_S)),
+            prediction_measured_s=float(rospy.get_param("~prediction_measured_s", PREDICTION_MEASURED_S)),
+            prediction_step_s=float(rospy.get_param("~prediction_step_s", PREDICTION_STEP_S)),
+            prediction_delay_s=float(rospy.get_param("~prediction_delay_s", PREDICTION_DELAY_S)))
         self.lock = threading.RLock()
         self.enabled = False
         self.finishing = False
         self.external_hold = False
         self.stopped_reports = 0
         self.competing_sources = []
-        self.max_cte = float(rospy.get_param("~max_cte", 0.4))
-        self.max_heading_error = float(rospy.get_param("~max_heading_error", 0.5))
-        self.goal_tolerance = float(rospy.get_param("~goal_tolerance", 0.4))
-        self.stopped_wheel_threshold = float(rospy.get_param("~stopped_wheel_threshold", 0.06))
+        self.max_cte = float(rospy.get_param("~max_cte", MAX_CTE_M))
+        self.max_heading_error = float(rospy.get_param("~max_heading_error", MAX_HEADING_ERROR_RAD))
+        self.goal_tolerance = float(rospy.get_param("~goal_tolerance", GOAL_TOLERANCE_M))
+        self.stopped_wheel_threshold = float(rospy.get_param("~stopped_wheel_threshold", STOPPED_WHEEL_THRESHOLD_MPS))
         self.pose = None
         self.pose_received = None
         self.wheel = None
@@ -116,9 +161,9 @@ class FFNode:
         self.diag_received = None
         self.reason = "PAUSED"
         self.last_tick = None
-        self.max_pose_age = float(rospy.get_param("~max_pose_age", 0.5))
-        self.max_wheel_age = float(rospy.get_param("~max_wheel_age", 0.35))
-        self.max_diag_age = float(rospy.get_param("~max_diag_age", 2.0))
+        self.max_pose_age = float(rospy.get_param("~max_pose_age", MAX_POSE_AGE_S))
+        self.max_wheel_age = float(rospy.get_param("~max_wheel_age", MAX_WHEEL_AGE_S))
+        self.max_diag_age = float(rospy.get_param("~max_diag_age", MAX_DIAG_AGE_S))
         self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
         self.status = rospy.Publisher("/ff_pid/status", String, queue_size=3)
         rospy.Subscriber("/fast_lio_icp/pose", PoseWithCovarianceStamped,
@@ -133,8 +178,8 @@ class FFNode:
                          queue_size=2)
         rospy.Service("/ff_pid/start", SetBool, self.on_start)
         # Querying ROS Master can block. Keep it off the 10Hz control path.
-        self.peer_timer = rospy.Timer(rospy.Duration(1.0), self.on_peer_check)
-        self.timer = rospy.Timer(rospy.Duration(0.1), self.on_tick)
+        self.peer_timer = rospy.Timer(rospy.Duration(PEER_CHECK_PERIOD_S), self.on_peer_check)
+        self.timer = rospy.Timer(rospy.Duration(CONTROL_PERIOD_S), self.on_tick)
         rospy.on_shutdown(self.stop)
         rospy.loginfo("FF-PD ready: %s, %d waypoints, %.1f m; PAUSED",
                       route_path, len(self.route.xy), self.route.length)
@@ -280,7 +325,7 @@ class FFNode:
                 # repeated stop-ramp commands based on fresh wheel feedback.
                 self.stop()
                 self.publish_status("GOAL_STOPPING")
-                if (self.stopped_reports >= 3 and self.wheel_received is not None
+                if (self.stopped_reports >= STOPPED_REPORTS_TO_FINISH and self.wheel_received is not None
                         and now - self.wheel_received <= self.max_wheel_age):
                     self.publish_status("GOAL_REACHED")
                     rospy.loginfo("FF-PD goal reached; wheels stopped; exiting")

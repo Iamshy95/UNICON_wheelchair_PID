@@ -4,40 +4,61 @@ ROS1 Noetic 기반 전동휠체어의 **정합 → 주행 → 정지**, 제어 �
 
 > **저장소 구분:** 이 개인 저장소는 팀 저장소 [UNICON_wheelchair_v2](https://github.com/Dannythechampion/UNICON_wheelchair_v2)의 **PID 패키지 사본**입니다. 개인 저장소에서는 코드가 `scripts/`에, 경로 파일이 `waypoints/`에 있습니다. 아래 실행 명령어는 센서·위치추정·구동부 등이 갖춰진 **NUC의 전체 팀 프로젝트**(`UNICON_wheelchair_v2`)를 기준으로 작성했습니다. 개인 저장소만 단독으로 내려받아서는 READY/DRIVE가 실행되지 않습니다.
 >
-> **동기화 기준:** 팀 저장소 `feature/ffpid`, 커밋 `661598a` (2026-11-06).
+> **동기화 기준:** NUC에 분리 배포한 팀 저장소 `feature/ffpid`, 커밋 `aadc8d1` (2026-11-06). 이후 README 수정은 기존 NUC 배포를 자동 변경하지 않습니다.
 
 ## 1. 명령어 빠른 참조
 
-아래 명령어는 **팀 저장소의 `feature/ffpid` 변경 사항이 NUC에 새 배포본으로 적용된 뒤**, NUC 터미널에서 실행합니다. GitHub에 푸시하는 것만으로 `~/wheelchair_deploys/current`가 변경되지는 않습니다.
+아래 명령어는 **NUC에 별도로 배포한 `ffpid-aadc8d1-20261106`** 기준입니다. GitHub에 푸시해도 NUC의 `current` 배포본은 자동으로 바뀌지 않습니다.
 
-NUC의 실제 실행 디렉터리는 `~/wheelchair_deploys/current/source-linux`이고, 해당 배포본 위치추정 작업공간은 `~/wheelchair_deploys/current/ws`입니다. `pid_ready.sh` 및 `pid_drive.sh`가 배포본을 기준으로 `LOCALIZATION_WS`를 자동 설정합니다. 구동부는 기존 `~/catkin_ws`, Livox는 `~/ws_livox`, FAST-LIO는 `~/fast_lio_ws`를 사용합니다.
+- **기존 배포:** `~/wheelchair_deploys/current` → `main` (`d1c2629`), 유지
+- **신규 FF–PD 배포:** `~/wheelchair_deploys/ffpid-aadc8d1-20261106` → `feature/ffpid` (`aadc8d1`)
+- **신규 작업공간:** `~/wheelchair_deploys/ffpid-aadc8d1-20261106/ws`; `pid_ready.sh`와 `pid_drive.sh`가 실행 파일의 위치를 기준으로 자동 선택
+- **공유 환경:** 구동부 `~/catkin_ws`, Livox `~/ws_livox`, FAST-LIO `~/fast_lio_ws`
 
-### 프로젝트 디렉터리 이동
+**`current`를 전환하거나 기존 디렉터리로 이동할 필요가 없습니다.** 아래 명령은 어느 작업 디렉터리에서든 실행할 수 있도록 신규 배포본의 절대경로를 사용합니다. 현재와 다른 이름으로 재배포했다면 경로 안의 `ffpid-aadc8d1-20261106` 부분을 실제 배포명으로 바꾸세요.
+
+### 신규 배포본 확인 (조회만)
 
 ```bash
-cd ~/wheelchair_deploys/current/source-linux
+D="$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106"
+git -C "$D/source-linux" rev-parse --short HEAD  # aadc8d1
+rospack find pid  # 신규 워크스페이스 setup.bash를 source한 터미널에서 확인
 ```
 
 ### ① 정합 및 주행 준비 — ROS bag 자동 녹화 포함
 
 ```bash
-bash src/pid/scripts/pid_ready.sh
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh"
 ```
 
-READY는 LiDAR, FAST-LIO, GICP, 장애물 인식, 구동부 및 Watchdog을 실행하고 상태를 점검합니다. **자율주행을 시작하지는 않습니다.** 정상 준비 뒤에도 READY의 모니터는 상태 변화를 감시합니다.
+READY는 LiDAR, FAST-LIO, GICP, 장애물 인식, 구동부 및 Watchdog을 실행하고 상태를 점검합니다. **자율주행을 시작하지는 않습니다.** 정상 준비 뒤에도 READY의 모니터는 상태 변화를 감시합니다. 이미 수동으로 실행한 LiDAR·FAST-LIO 등은 중복 실행을 피하도록 먼저 정상 종료하세요. READY가 시작한 노드는 백그라운드에 남으므로, READY 터미널에서 `Ctrl+C`만 눌러도 센서·구동 노드가 종료되는 것은 아닙니다.
+
+현재 상태만 보려면 (`start` 아님):
+
+```bash
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" status
+```
+
+상태 변화 모니터링:
+
+```bash
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" watch
+```
+
+**GICP 주의:** 실내에서 야외 Route2 지도를 사용했는데도 내부 정합 조건을 통과하여 `TRACKING`이 나온 사례가 있습니다. `READY` 성공은 실제 지도 위치의 정확성을 보증하지 않습니다. 야외에서 실제 기준점과 추정 위치·방향을 비교하기 전에는 주행 허가 근거로 사용하지 마세요. 장애물 자동 정지 역시 FF–PD 경로에 아직 연결되지 않았습니다.
 
 ### ② 경로 지정 후 주행 시작
 
 경로 선택 메뉴를 열려면:
 
 ```bash
-bash src/pid/scripts/pid_drive.sh
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh"
 ```
 
 경로를 바로 지정하려면:
 
 ```bash
-bash src/pid/scripts/pid_drive.sh A_to_D5
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" A_to_D5
 ```
 
 사용 가능한 경로는 다음 6개입니다.
@@ -53,13 +74,13 @@ D5_to_D4
 
 ### ③ 파라미터 변경 후 주행 시작
 
-VS Code에서 **NUC에서 실행하는 실제 파일** `src/pid/scripts/ff_pid_core.py`를 열어 `KP`, `KD`, `MAX_V_MPS` 등 원하는 값을 수정하고 저장합니다.
+VS Code에서 **NUC에서 실행하는 신규 배포본의 실제 파일** `~/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/ff_pid_core.py`를 열어 `KP`, `KD`, `MAX_V_MPS` 등 원하는 값을 수정하고 저장합니다.
 
 이미 주행 중이면 먼저 정지한 뒤 다시 시작합니다.
 
 ```bash
-bash src/pid/scripts/pid_stop.sh
-bash src/pid/scripts/pid_drive.sh A_to_D5
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_stop.sh"
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" A_to_D5
 ```
 
 **Python 파라미터 수정에는 재빌드가 필요하지 않습니다.** 값은 FF–PD 노드를 새로 실행할 때 적용됩니다. 단, 해당 항목의 `/ff_pid/*` ROS private 파라미터가 설정돼 있으면 그 값이 파일의 기본값보다 우선합니다.
@@ -69,7 +90,7 @@ bash src/pid/scripts/pid_drive.sh A_to_D5
 ### ④ 자율주행 정지
 
 ```bash
-bash src/pid/scripts/pid_stop.sh
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_stop.sh"
 ```
 
 FF–PD 정지와 MANUAL 복귀를 요청합니다. **READY, 위치추정 및 ROS bag 녹화는 계속 유지**되므로 주행을 다시 시작할 때 READY를 반복할 필요는 없습니다.
@@ -77,7 +98,7 @@ FF–PD 정지와 MANUAL 복귀를 요청합니다. **READY, 위치추정 및 RO
 ### ⑤ 현재 위치 확인
 
 ```bash
-bash src/pid/scripts/pid_drive.sh position
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" position
 ```
 
 현재 GICP Map 기준 X, Y, Yaw를 한 번 출력합니다. 주행 명령을 보내지 않습니다.
@@ -86,13 +107,13 @@ bash src/pid/scripts/pid_drive.sh position
 
 ```bash
 # 출발·도착 지점
-bash src/pid/scripts/pid_ready_bag.sh mark START_A
-bash src/pid/scripts/pid_ready_bag.sh mark START_D4
-bash src/pid/scripts/pid_ready_bag.sh mark START_D5
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark START_A
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark START_D4
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark START_D5
 
 # 과속방지턱
-bash src/pid/scripts/pid_ready_bag.sh mark BUMP_ENTRY
-bash src/pid/scripts/pid_ready_bag.sh mark BUMP_EXIT
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_ENTRY
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_EXIT
 ```
 
 각 명령은 `/manual_mark` 토픽에 마커를 전송합니다. 해당 시각의 위치·바퀴 정보는 녹화된 bag과 대응해 분석할 수 있습니다.
@@ -100,7 +121,7 @@ bash src/pid/scripts/pid_ready_bag.sh mark BUMP_EXIT
 ### ⑦ 실험 완료 후 ROS bag 녹화 종료
 
 ```bash
-bash src/pid/scripts/pid_ready_bag.sh stop
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" stop
 ```
 
 자율주행 정지와 별개입니다. 녹화가 계속 필요한 동안에는 이 명령어를 실행하지 않습니다.
@@ -165,7 +186,7 @@ bash src/pid/scripts/pid_ready_bag.sh stop
 
 ### 현재 기본 제어 파라미터
 
-파일: `src/pid/scripts/ff_pid_core.py` (개인 저장소에서는 `scripts/ff_pid_core.py`)
+파일: NUC 신규 배포본의 `source-linux/src/pid/scripts/ff_pid_core.py` (개인 저장소에서는 `scripts/ff_pid_core.py`)
 
 | 변수 | 기본값 | 의미 |
 |---|---:|---|
@@ -253,4 +274,4 @@ READY와 녹화는 자율주행을 STOP한 이후에도 유지되므로 수동�
 
 실제 주행 시험은 통제된 구역에서 실시하고, 작업자가 물리적 정지 수단을 확보해야 합니다. 소프트웨어 정지 스크립트는 안전 인증된 비상정지 기능이 아닙니다.
 
-**검증 범위:** GitHub에 반영된 코드 확인. NUC 실기 구동 검증 및 장애물 정지 기능 검증은 포함되지 않습니다.
+**검증 범위 (2026-11-06):** NUC의 신규 배포본 `aadc8d1`에서 `static_livox_localization`과 `pid` 빌드 성공, LiDAR 약 10 Hz·IMU 약 200 Hz, FAST-LIO `/Odometry` 약 10 Hz, READY의 센서·GICP·인지·UART·Watchdog·녹화 통합 검사 통과. 기존 테스트 3개 및 NUC 실제 `wheel_cmd_tmp.py`와 GitHub 스냅샷 불일치로 생긴 추가 1개 실패는 확인 후 오프라인 배포 범위로 수동 승인했습니다. **GICP 절대위치 정확성, FF–PD 실제 주행, 장애물 자동 정지는 검증되지 않았습니다.**

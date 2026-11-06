@@ -25,6 +25,60 @@ git -C "$D/source-linux" rev-parse --short HEAD  # aadc8d1
 rospack find pid  # 신규 워크스페이스 setup.bash를 source한 터미널에서 확인
 ```
 
+### NUC 접속 후 터미널 환경 설정
+
+ROS 명령어(`rostopic`, `rosnode`)를 **직접 확인할 때만** 아래를 실행합니다. `source setup.bash`처럼 파일명만 입력하면 현재 디렉터리에 파일이 없어서 실패합니다.
+
+```bash
+source /opt/ros/noetic/setup.bash
+source "$HOME/ws_livox/devel/setup.bash"
+source "$HOME/fast_lio_ws/devel/setup.bash"
+source "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/ws/devel/setup.bash"
+```
+
+`pid_ready.sh start/status/watch` 명령 자체는 필요한 ROS 환경을 내부에서 설정합니다. 별도 `source` 없이 바로 실행해도 됩니다.
+
+### READY 전체 종료 (주행 정지와 별개)
+
+`pid_stop.sh`는 FF–PD 주행만 정지합니다. `pid_ready.sh`로 시작된 LiDAR·FAST-LIO·GICP·인지·UART·ROS Master 및 ROS bag은 계속 남습니다. 특히 READY 실패 후에는 `start.lock`을 보유한 프로세스 때문에 다음 READY 시작이 차단될 수 있습니다. `Ctrl+C`는 상태 표시만 종료합니다.
+
+개인 저장소에 추가한 [`scripts/pid_ready_shutdown.sh`](scripts/pid_ready_shutdown.sh)는 최신 READY 실행 기록에 있는 **프로세스 그룹만** 정리하고, 가능한 경우 ROS bag을 정상 종료합니다. NUC에서 한번 다운로드:
+
+```bash
+curl -fL --retry 2 \
+  https://raw.githubusercontent.com/Iamshy95/UNICON_wheelchair_PID/main/scripts/pid_ready_shutdown.sh \
+  -o "$HOME/pid_ready_shutdown.sh"
+bash -n "$HOME/pid_ready_shutdown.sh"
+```
+
+**실행 전 휠체어가 실제로 정지했고 물리적으로 MANUAL 상태인지 확인하세요.** 자동 종료 스크립트는 ROS Master를 통해 FF–PD가 실행 중인 경우 우선 정지하고, 바퀴 상태를 확인한 후 하드웨어 노드를 종료합니다. 확인할 수 없는 상황에서는 종료를 중단합니다. 소프트웨어 정지는 물리적 긴급정지를 대신하지 않습니다.
+
+```bash
+bash "$HOME/pid_ready_shutdown.sh"
+```
+
+기존 ROS Master가 이미 종료되어 정차 검증을 할 수 없는 경우에는 자동 종료가 중단됩니다. 물리적 정차·MANUAL 확인 후 남은 기록 프로세스를 별도 점검해야 합니다. `start.lock` 파일 자체를 삭제하지 마세요.
+
+ROS bag **녹화만** 정지하려면:
+
+```bash
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" stop
+```
+
+### 센서 데이터 확인
+
+```bash
+source /opt/ros/noetic/setup.bash
+source "$HOME/ws_livox/devel/setup.bash"
+source "$HOME/fast_lio_ws/devel/setup.bash"
+
+rostopic hz /livox/lidar  # 정상 약 10 Hz; Ctrl+C로 종료
+rostopic hz /livox/imu    # 정상 약 200 Hz
+rostopic hz /Odometry     # FAST-LIO 정상 약 10 Hz
+```
+
+`Cannot load message class for [livox_ros_driver2/CustomMsg]`는 LiDAR 장애의 직접 증거가 아니며, ROS 드라이버 메시지 워크스페이스를 `source`하지 않았을 때 발생할 수 있습니다.
+
 ### ① 정합 및 주행 준비 — ROS bag 자동 녹화 포함
 
 ```bash

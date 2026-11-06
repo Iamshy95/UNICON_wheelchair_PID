@@ -4,16 +4,18 @@ ROS1 Noetic 기반 전동휠체어의 **정합 → 주행 → 정지**, 제어 �
 
 > **저장소 구분:** 이 개인 저장소는 팀 저장소 [UNICON_wheelchair_v2](https://github.com/Dannythechampion/UNICON_wheelchair_v2)의 **PID 패키지 사본**입니다. 개인 저장소에서는 코드가 `scripts/`에, 경로 파일이 `waypoints/`에 있습니다. 아래 실행 명령어는 센서·위치추정·구동부 등이 갖춰진 **NUC의 전체 팀 프로젝트**(`UNICON_wheelchair_v2`)를 기준으로 작성했습니다. 개인 저장소만 단독으로 내려받아서는 READY/DRIVE가 실행되지 않습니다.
 >
-> **동기화 기준:** 팀 저장소 `feature/ffpid`, 커밋 `48c7b826` (2026-11-06).
+> **동기화 기준:** 팀 저장소 `feature/ffpid`, 커밋 `661598a` (2026-11-06).
 
 ## 1. 명령어 빠른 참조
 
-아래 명령어는 NUC 터미널에서 실행합니다.
+아래 명령어는 **팀 저장소의 `feature/ffpid` 변경 사항이 NUC에 새 배포본으로 적용된 뒤**, NUC 터미널에서 실행합니다. GitHub에 푸시하는 것만으로 `~/wheelchair_deploys/current`가 변경되지는 않습니다.
+
+NUC의 실제 실행 디렉터리는 `~/wheelchair_deploys/current/source-linux`이고, 해당 배포본 위치추정 작업공간은 `~/wheelchair_deploys/current/ws`입니다. `pid_ready.sh` 및 `pid_drive.sh`가 배포본을 기준으로 `LOCALIZATION_WS`를 자동 설정합니다. 구동부는 기존 `~/catkin_ws`, Livox는 `~/ws_livox`, FAST-LIO는 `~/fast_lio_ws`를 사용합니다.
 
 ### 프로젝트 디렉터리 이동
 
 ```bash
-cd ~/ws/wheelchair_ws/UNICON_wheelchair_v2
+cd ~/wheelchair_deploys/current/source-linux
 ```
 
 ### ① 정합 및 주행 준비 — ROS bag 자동 녹화 포함

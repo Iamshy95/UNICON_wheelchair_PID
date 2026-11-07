@@ -107,7 +107,7 @@ for ((i=0; i<35; i++)); do
 done
 [[ "$ready" == 1 ]] || { bash "$STOP" >/dev/null 2>&1 || true; fail "FF-PD 노드 시작 실패. 로그: $LOG"; }
 
-SAFETY_LOG="$RUN_DIR/pid_safety_$ROUTE_$(date +%Y%m%d_%H%M%S).log"
+SAFETY_LOG="$RUN_DIR/pid_safety_${ROUTE}_$(date +%Y%m%d_%H%M%S).log"
 setsid nohup env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   python3 -u "$SAFETY" "_route:=$ROUTE" \
   > "$SAFETY_LOG" 2>&1 < /dev/null &

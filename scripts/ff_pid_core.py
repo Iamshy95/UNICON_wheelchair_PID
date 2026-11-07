@@ -26,8 +26,6 @@ MAX_WHEEL_MPS = 1.00             # 좌·우 각각의 바퀴 최대 구동 속�
 LATERAL_ACCEL_MPS2 = 0.15        # 커브 감속에 사용할 횡가속도 제한 [m/s²]
 CURVATURE_PREVIEW_M = 2.0
 CRUISE_MIN_MPS = 0.60
-STEER_ENABLE_MPS = 0.50
-CURVE_START_THRESHOLD = 0.30
 SLOW_FLAT_MPS = 0.40
 SLOW_HILL_MPS = 0.50
 SLOW_STEEP_MPS = 0.60
@@ -213,7 +211,6 @@ class FFPD:
         self.station = None
         self.prev_error = None
         self.integral = 0.0
-        self.steering_armed = False
         self.last_observation_id = None
         self.last_observation_time = None
         self.last_derivative_error = None
@@ -224,7 +221,6 @@ class FFPD:
         self.prev_error = None
         self.integral = 0.0
         self.predictor.reset()
-        self.steering_armed = False
         self.last_observation_id = None
         self.last_observation_time = None
         self.last_derivative_error = None
@@ -290,25 +286,18 @@ class FFPD:
         k_d = float(np.clip(-self.kd * self.derivative,
                             -self.d_limit, self.d_limit))
         k_i = -self.ki * self.integral
-        if not self.steering_armed and abs(measured[0]) >= STEER_ENABLE_MPS:
-            self.steering_armed = True
-        on_curve_start = max(abs(k_ff), abs(k_preview)) >= CURVE_START_THRESHOLD
-        if self.steering_armed:
-            k_cmd = k_ff + k_p + k_d + k_i
-            steering_state = "TRACKING"
-        elif on_curve_start:
-            k_cmd = k_ff
-            steering_state = "CURVE_START_FF"
-        else:
-            k_cmd = 0.0
-            steering_state = "STRAIGHT_START"
+        # Always calculate FF-PD; low measured speed limits the final yaw rate below.
+        k_cmd = k_ff + k_p + k_d + k_i
+        steering_state = "TRACKING"
         requested_w = v * k_cmd
-        # Saturate steering to achievable wheel speeds; do not HOLD on tuning mismatch.
+        # The slower wheel must stay above min_wheel in the command, while
+        # measured vehicle speed limits how much turning is allowed at launch.
+        v_for_steering = min(v, measured[0])
         if v <= 0.0:
             allowable_w = 0.0
         else:
             allowable_w = max(0.0, min(self.max_w,
-                2 * (v - self.min_wheel) / self.wheel_track,
+                2 * (v_for_steering - self.min_wheel) / self.wheel_track,
                 2 * (self.max_wheel - v) / self.wheel_track))
         w = float(np.clip(requested_w, -allowable_w, allowable_w))
         vl, vr = v - self.wheel_track * w / 2, v + self.wheel_track * w / 2

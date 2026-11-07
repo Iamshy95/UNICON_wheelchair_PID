@@ -29,6 +29,7 @@ catkin_package(
 catkin_install_python(
   PROGRAMS
     scripts/ff_pid_node.py
+    scripts/pid_safety.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

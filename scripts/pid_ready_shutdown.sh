@@ -41,14 +41,15 @@ else
   warn 'ROS Master unavailable; physical motor state cannot be verified.'
 fi
 
-for name in ff_pid.pid; do
+for name in ff_pid.pid pid_safety.pid; do
   [[ -s "$RUN_DIR/$name" ]] || continue
   IFS= read -r pid < "$RUN_DIR/$name"
   [[ "$pid" =~ ^[0-9]+$ ]] || continue
   pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
   [[ "$pgid" == "$pid" ]] || continue
   cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-  if [[ "$cmd" == *ff_pid_node.py* ]]; then
+  if [[ ( "$name" == ff_pid.pid && "$cmd" == *ff_pid_node.py* ) ||
+        ( "$name" == pid_safety.pid && "$cmd" == *pid_safety.py* ) ]]; then
     kill -TERM -- "-$pgid" 2>/dev/null || true
   fi
 done

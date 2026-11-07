@@ -177,7 +177,7 @@ class FFNode:
         self.odom_latest = None
         self.odom_received = None
         self.pitch_deg = 0.0
-        self.motion_policy = "CLEAR"
+        self.motion_policy = "STOP"
         self.policy_received = None
         self.obstacle_stopped = False
         self.resume_after_obstacle = False
@@ -337,6 +337,8 @@ class FFNode:
                 # 정지 요청 해제만으로 주행이 다시 시작되지 않게 합니다.
 
     def readiness(self, now):
+        if self.policy_received is None or now - self.policy_received > 1.0:
+            return "SAFETY_POLICY_STALE"
         if self.current_pose(now) is None:
             return "POSE_STALE"
         if self.wheel is None or self.wheel_received is None or now - self.wheel_received > self.max_wheel_age:
@@ -486,7 +488,7 @@ class FFNode:
             self.reason = state
             values = {"state": state}
             if result is not None:
-                values.update({k: v for k, v in result.items() if k != "predicted_pose"})
+                values.update(result)  # publish same FF-PD prediction to Safety
             self.status.publish(String(data=json.dumps(values)))
 
 

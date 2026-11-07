@@ -35,17 +35,19 @@ fi
 if node_alive; then
   timeout 5 rosnode kill /ff_pid >/dev/null 2>&1 || true
 fi
+timeout 5 rosnode kill /pid_safety >/dev/null 2>&1 || true
 STATE_DIR="${PID_READY_STATE_DIR:-$HOME/.local/state/pid_ready}"
 if [[ -s "$STATE_DIR/latest_run_dir" ]]; then
   IFS= read -r RUN_DIR < "$STATE_DIR/latest_run_dir"
-  for item in ff_pid.pid; do
+  for item in ff_pid.pid pid_safety.pid; do
     [[ -s "$RUN_DIR/$item" ]] || continue
     IFS= read -r pid < "$RUN_DIR/$item"
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
     pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
     [[ "$pgid" == "$pid" ]] || continue
     cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-    if [[ "$cmd" == *ff_pid_node.py* ]]; then
+    if [[ ( "$item" == ff_pid.pid && "$cmd" == *ff_pid_node.py* ) ||
+          ( "$item" == pid_safety.pid && "$cmd" == *pid_safety.py* ) ]]; then
       kill -TERM -- "-$pgid" 2>/dev/null || true
     fi
   done
@@ -58,4 +60,4 @@ if [[ "$VERIFIED" != 1 ]]; then
   msg '[WARN] FF-PD process cleanup requested, but physical stop is NOT verified.'
   exit 2
 fi
-msg '[OK] FF-PD control process ended. READY sensor/GICP/bag remain running.'
+msg '[OK] FF-PD and Safety ended. READY sensor/GICP/bag remain running.'

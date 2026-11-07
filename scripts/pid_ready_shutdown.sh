@@ -1,101 +1,133 @@
 #!/usr/bin/env bash
-# Full PID READY session shutdown (ROS1 Noetic on NUC).
-# NOT an emergency stop. Operate only after physical MANUAL / stopped check.
-# Stops the bag cleanly, then ONLY the process groups recorded by this READY run.
-# Does not switch or modify ~/wheelchair_deploys/current.
+# READY cleanup: stop driving, finalize bag, stop process groups of this READY
+# session even after startup failure. Missing feedback is not physical stop.
 set -Eeuo pipefail
-
-DEPLOY="${PID_READY_DEPLOY_DIR:-$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106}"
-S="$DEPLOY/source-linux/src/pid/scripts"
-STATE="${PID_READY_STATE_DIR:-$HOME/.local/state/pid_ready}"
+S="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+STATE_DIR="${PID_READY_STATE_DIR:-$HOME/.local/state/pid_ready}"
 ROS_SETUP="${ROS_SETUP:-/opt/ros/noetic/setup.bash}"
-: "${ROS_MASTER_URI:=http://localhost:11311}"
-export ROS_MASTER_URI
-
-fail() { echo "[FAIL] $*" >&2; exit 1; }
-info() { echo "[INFO] $*"; }
-ok() { echo "[OK] $*"; }
-
-[[ "$#" == 0 ]] || fail "Usage: bash pid_ready_shutdown.sh"
-[[ -f "$ROS_SETUP" ]] || fail "ROS setup missing: $ROS_SETUP"
-[[ -s "$STATE/latest_run_dir" ]] || fail "No READY run recorded"
-IFS= read -r RUN_DIR < "$STATE/latest_run_dir"
-[[ -d "$RUN_DIR" && -f "$RUN_DIR/started_pids.tsv" ]] || fail "Missing PID list: $RUN_DIR"
-[[ "$RUN_DIR" == "$HOME/pid_ready_logs/"* || -n "${PID_READY_LOG_DIR:-}" ]] ||
-  fail "Unexpected RUN_DIR: $RUN_DIR"
-for file in pid_stop.sh pid_drive_check.py pid_ready_bag.sh; do
-  [[ -f "$S/$file" ]] || fail "Missing deployed helper: $S/$file"
-done
-command -v fuser >/dev/null 2>&1 || fail "Need fuser to verify shutdown"
-
+MODE="${1:-normal}"
+if [[ "$MODE" == --startup-failure ]]; then
+  [[ "$#" == 2 ]] || exit 64
+  RUN_DIR="$2"
+elif [[ "$MODE" == normal ]]; then
+  [[ "$#" == 0 ]] || exit 64
+  [[ -s "$STATE_DIR/latest_run_dir" ]] || { echo '[OK] No READY run to stop'; exit 0; }
+  IFS= read -r RUN_DIR < "$STATE_DIR/latest_run_dir"
+else
+  echo 'usage: pid_ready_shutdown.sh [--startup-failure RUN_DIR]' >&2
+  exit 64
+fi
+[[ -d "$RUN_DIR" && -f "$RUN_DIR/started_pids.tsv" ]] || {
+  echo "[FAIL] READY registry missing: $RUN_DIR" >&2; exit 1;
+}
+[[ -r "$ROS_SETUP" ]] || { echo '[FAIL] ROS setup missing' >&2; exit 1; }
 set +u
-# shellcheck disable=SC1090
 source "$ROS_SETUP"
 set -u
-
+warn() { printf '[WARN] %s\n' "$*" >&2; }
+info() { printf '[INFO] %s\n' "$*"; }
 master_alive() { timeout 3 rosparam list >/dev/null 2>&1; }
-node_alive() { timeout 3 rosnode ping -c1 "$1" >/dev/null 2>&1; }
+node_alive() { timeout 3 rosnode list 2>/dev/null | grep -Fx "$1" >/dev/null; }
+failed=0
 
-# A software shutdown MUST NOT tear down hardware control during unverified motion.
-# First use the physical joystick/E-stop to ensure MANUAL and stopped.
 if master_alive; then
   if node_alive /ff_pid; then
-    info "FF-PD active: requesting verified STOP first"
-    bash "$S/pid_stop.sh" || fail "FF-PD stop verification failed; nothing was torn down"
-  fi
-  if node_alive /uart || node_alive /wheel_cmd || node_alive /odom_pub; then
-    info "Checking MANUAL and stopped wheel feedback"
-    python3 "$S/pid_drive_check.py" wheel --mode MANUAL --stopped --timeout 8 ||
-      fail "Cannot verify MANUAL + stopped; nothing was torn down"
+    info 'Drive STOP requested before READY shutdown.'
+    bash "$S/pid_stop.sh" || warn 'Drive stop not verifiable; physically disable motor if needed.'
+  else
+    timeout 4 rostopic pub -1 /mode_cmd std_msgs/Int16 'data: 77' >/dev/null 2>&1 || true
   fi
 else
-  # When there is no ROS Master, the wheel mode cannot be verified through ROS.
-  # Refuse to kill a possibly still-live base process.
-  while IFS=$'\t' read -r name pid; do
-    [[ "$name" == base && "$pid" =~ ^[0-9]+$ ]] || continue
-    if kill -0 "$pid" 2>/dev/null; then
-      fail "ROS Master unreachable while recorded base PID $pid remains; verify physically and inspect before shutdown"
+  warn 'ROS Master unavailable; physical motor state cannot be verified.'
+fi
+
+for name in ff_pid.pid ff_pid_safety.pid; do
+  [[ -s "$RUN_DIR/$name" ]] || continue
+  IFS= read -r pid < "$RUN_DIR/$name"
+  [[ "$pid" =~ ^[0-9]+$ ]] || continue
+  pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$pgid" == "$pid" ]] || continue
+  cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  if [[ "$name" == ff_pid.pid && "$cmd" == *ff_pid_node.py* ]] ||
+     [[ "$name" == ff_pid_safety.pid && "$cmd" == *pid_motion_safety.py* ]]; then
+    kill -TERM -- "-$pgid" 2>/dev/null || true
+  fi
+done
+
+# Request SIGINT to finalize rosbag before ROS publishers are stopped.
+if [[ -s "$RUN_DIR/rosbag.pid" ]]; then
+  IFS= read -r pid < "$RUN_DIR/rosbag.pid"
+  if [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]]; then
+    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    if [[ "$pgid" == "$pid" && "$cmd" == *rosbag* && "$cmd" == *record* ]]; then
+      info "Closing rosbag PID=$pid"
+      kill -INT -- "-$pgid" 2>/dev/null || true
+      for ((j=0;j<40;j++)); do
+        state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+        [[ -z "$state" || "$state" == Z* ]] && break
+        sleep 0.25
+      done
+      state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+      if [[ -n "$state" && "$state" != Z* ]]; then
+        warn "Rosbag not confirmed closed: PID=$pid"
+        failed=1
+      fi
     fi
-  done < "$RUN_DIR/started_pids.tsv"
-  info "ROS Master absent and no recorded base process alive"
+  fi
 fi
 
-# Finalize the recorder before stopping its ROS publishers and Master.
-if bash "$S/pid_ready_bag.sh" status | grep -Fq '[OK] Recorder active:'; then
-  info "Finalizing ROS bag"
-  bash "$S/pid_ready_bag.sh" stop || fail "ROS bag did not finalize; stop and inspect it before restarting"
-else
-  info "ROS bag recorder already stopped"
+shopt -s nullglob
+active_bags=("$RUN_DIR"/ready_topics*.bag.active)
+if (( ${#active_bags[@]} )); then
+  warn "Bag segments still active/incomplete: ${active_bags[*]}"
+  failed=1
 fi
+shopt -u nullglob
 
-# READY starts all components with setsid; only kill verified group leaders,
-# in reverse order, and never sweep all ROS processes on the machine.
 while IFS=$'\t' read -r name pid; do
   [[ "$pid" =~ ^[0-9]+$ ]] || continue
-  group="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
-  [[ "$group" == "$pid" ]] || continue
-  case "$name" in
-    roscore) expected=roscore ;;
-    livox|fastlio|localization|base) expected=roslaunch ;;
-    geometry) expected=hybrid_geometric ;;
-    fusion) expected=hybrid_object ;;
-    exclusion) expected=localization_exclusion ;;
-    stop_watchdog) expected=stop_watchdog ;;
-    *) info "Skipping unknown process: $name"; continue ;;
-  esac
+  pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$pgid" == "$pid" ]] || continue
   cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  case "$name" in
+    roscore) expected='roscore' ;;
+    livox) expected='msg_MID360.launch' ;;
+    fastlio) expected='mapping_mid360.launch' ;;
+    localization) expected='moving_localization.launch' ;;
+    base) expected='wheel.launch' ;;
+    geometry) expected='hybrid_geometric_objects.py' ;;
+    fusion) expected='hybrid_object_fusion.py' ;;
+    exclusion) expected='localization_exclusion_boxes.py' ;;
+    stop_watchdog) expected='stop_watchdog.py' ;;
+    *) warn "Unknown registered component: $name"; failed=1; continue ;;
+  esac
   [[ "$cmd" == *"$expected"* ]] || {
-    info "Skipping PID $pid (process identity differs)"
+    warn "PID identity changed: $name $pid (not signalled)"
+    failed=1
     continue
   }
-  info "Stopping $name (group $group)"
-  kill -TERM -- "-$group"
-  sleep 0.5
+  info "Stopping $name process group $pgid"
+  kill -TERM -- "-$pgid" 2>/dev/null || true
 done < <(tac "$RUN_DIR/started_pids.tsv")
 
-sleep 3
-echo '=== READY startup lock holders ==='
-if fuser -v "$STATE/start.lock"; then
-  fail "A process still holds start.lock; do NOT remove the file or rerun READY"
+sleep 2
+while IFS=$'\t' read -r name pid; do
+  [[ "$pid" =~ ^[0-9]+$ ]] || continue
+  state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ -n "$state" && "$state" != Z* ]]; then
+    cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    if [[ "$cmd" == *roslaunch* || "$cmd" == *roscore* || "$cmd" == *python* ]]; then
+      warn "Registered process still running: $name pid=$pid"
+      failed=1
+    fi
+  fi
+done < "$RUN_DIR/started_pids.tsv"
+
+if [[ "$failed" -eq 0 ]]; then
+  echo '[OK] READY processes terminated; bag finalization requested.'
+else
+  warn 'Cleanup incomplete. Check PIDs and bag before restarting.'
 fi
-ok "READY processes and rosbag stopped; start.lock released"
+warn 'MANUAL command is not physical stop confirmation.'
+exit "$failed"

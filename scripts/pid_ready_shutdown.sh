@@ -72,6 +72,9 @@ if [[ -s "$RUN_DIR/rosbag.pid" ]]; then
         warn "Rosbag not confirmed closed: PID=$pid"
         failed=1
       fi
+    elif [[ -n "$cmd" ]]; then
+      warn "Recorded ROS bag PID no longer identifies its recorder: $pid"
+      failed=1
     fi
   fi
 fi
@@ -124,7 +127,13 @@ while IFS=$'\t' read -r name pid; do
 done < "$RUN_DIR/started_pids.tsv"
 
 if [[ "$failed" -eq 0 ]]; then
-  echo '[OK] READY processes terminated; bag finalization requested.'
+  if [[ -s "$STATE_DIR/latest_run_dir" ]]; then
+    IFS= read -r recorded_run < "$STATE_DIR/latest_run_dir"
+    if [[ "$recorded_run" == "$RUN_DIR" ]]; then
+      rm -f "$STATE_DIR/latest_run_dir"
+    fi
+  fi
+  echo '[OK] READY processes terminated; bag closure checked.'
 else
   warn 'Cleanup incomplete. Check PIDs and bag before restarting.'
 fi

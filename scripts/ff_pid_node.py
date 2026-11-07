@@ -80,15 +80,13 @@ AUTO_MODE = 65  # NUC 구동부에서 사용하는 자동 모드 값
 # 아래 값은 ROS 노드의 실행 조건 및 정지 판단에만 사용합니다.
 # Kp, Kd, FF, 바퀴 간격, 속도 제한 등의 기본값은 ff_pid_core.py 상단에 있습니다.
 # 필요한 경우 ROS private 파라미터로 실행 시 값만 덮어쓸 수 있습니다.
-MAX_CTE_M = 0.70                # 허용 경로 이탈 거리 [m]
-MAX_HEADING_ERROR_RAD = 1.50    # 허용 경로 접선과의 자세 오차 [rad]
 GOAL_TOLERANCE_M = 0.40         # 목표점 도착 허용 거리 [m]
 STOPPED_WHEEL_THRESHOLD_MPS = 0.06  # 정지로 간주할 바퀴 속도 [m/s]
 STOPPED_REPORTS_TO_FINISH = 3   # 종료 전 연속 정지 확인 횟수
 MAX_POSE_AGE_S = 0.50           # 허용 위치 데이터 수신 지연 [s]
 MAX_WHEEL_AGE_S = 0.35          # 허용 바퀴 상태 수신 지연 [s]
 MAX_DIAG_AGE_S = 2.0            # 허용 GICP 진단 수신 지연 [s]
-CONTROL_PERIOD_S = 0.02        # ROS 제어 주기 [s] (10Hz)
+CONTROL_PERIOD_S = 0.02        # ROS 제어 주기 [s] (50Hz)
 PEER_CHECK_PERIOD_S = 1.0      # /cmd_vel 중복 발행자 확인 주기 [s]
 # ================================================================
 
@@ -166,8 +164,6 @@ class FFNode:
         self.external_hold = False
         self.stopped_reports = 0
         self.competing_sources = []
-        self.max_cte = float(rospy.get_param("~max_cte", MAX_CTE_M))
-        self.max_heading_error = float(rospy.get_param("~max_heading_error", MAX_HEADING_ERROR_RAD))
         self.goal_tolerance = float(rospy.get_param("~goal_tolerance", GOAL_TOLERANCE_M))
         self.stopped_wheel_threshold = float(rospy.get_param("~stopped_wheel_threshold", STOPPED_WHEEL_THRESHOLD_MPS))
         self.pose = None
@@ -212,7 +208,7 @@ class FFNode:
         rospy.Subscriber("/ff_pid/stop_request", Bool, self.on_external_stop,
                          queue_size=2)
         rospy.Service("/ff_pid/start", SetBool, self.on_start)
-        # ROS Master 조회가 지연될 수 있어 10Hz 제어 루프와 분리합니다.
+        # ROS Master 조회가 지연될 수 있어 50Hz 제어 루프와 분리합니다.
         self.peer_timer = rospy.Timer(rospy.Duration(PEER_CHECK_PERIOD_S), self.on_peer_check)
         self.timer = rospy.Timer(rospy.Duration(CONTROL_PERIOD_S), self.on_tick)
         rospy.on_shutdown(self.stop)

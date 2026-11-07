@@ -34,7 +34,13 @@ select_route() {
   fail "잘못된 경로: $input"
 }
 
-[[ "$#" -le 1 ]] || fail '사용법: bash src/pid/scripts/pid_drive.sh [A_to_D5|1-6]'
+[[ "$#" -le 2 ]] || fail '사용법: bash src/pid/scripts/pid_drive.sh [A_to_D5|1-6] [--test-clear]'
+TEST_CLEAR=false
+if [[ "$#" -eq 2 ]]; then
+  [[ "$2" == "--test-clear" ]] || fail '두 번째 인자는 --test-clear만 사용할 수 있습니다.'
+  [[ "$1" != "position" ]] || fail 'position에는 --test-clear를 사용할 수 없습니다.'
+  TEST_CLEAR=true
+fi
 ROUTE=""
 if [[ "${1:-}" != "position" ]]; then
   ROUTE="$(select_route "${1:-}")"
@@ -108,8 +114,14 @@ done
 [[ "$ready" == 1 ]] || { bash "$STOP" >/dev/null 2>&1 || true; fail "FF-PD 노드 시작 실패. 로그: $LOG"; }
 
 SAFETY_LOG="$RUN_DIR/pid_safety_${ROUTE}_$(date +%Y%m%d_%H%M%S).log"
+# Always overwrite the private ROS param: the previous test=true can survive node exit.
+SAFETY_PARAMS=("_route:=$ROUTE" "_test_clear:=false")
+if [[ "$TEST_CLEAR" == true ]]; then
+  SAFETY_PARAMS=("_route:=$ROUTE" "_test_clear:=true")
+  printf '[WARN] TEST CLEAR: 장애물/마스크 감시 없이 CLEAR만 발행합니다.\n' >&2
+fi
 setsid nohup env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-  python3 -u "$SAFETY" "_route:=$ROUTE" \
+  python3 -u "$SAFETY" "${SAFETY_PARAMS[@]}" \
   > "$SAFETY_LOG" 2>&1 < /dev/null &
 SAFETY_PID=$!
 printf '%s\n' "$SAFETY_PID" > "$RUN_DIR/pid_safety.pid"
@@ -151,7 +163,11 @@ printf '%s\n' "$reply" | grep -Eq '^success: [Tt]rue' || fail "제어기가 시�
 printf '\n[RUN] %s 경로 주행 시작\n' "$ROUTE"
 printf '[INFO] 현재 위치부터 선택 경로를 추종합니다. 시작점 일치 조건은 없습니다.\n'
 printf '[INFO] 별도 터미널에서: bash src/pid/scripts/pid_stop.sh\n'
-printf '[INFO] Safety CLEAR/SLOW/STOP 연결됨 (인식 타임아웃 1.0초).\n'
+if [[ "$TEST_CLEAR" == true ]]; then
+  printf '[WARN] TEST CLEAR 모드: 장애물 및 마스크 자동 STOP 비활성화.\n'
+else
+  printf '[INFO] Safety CLEAR/SLOW/STOP 연결됨 (인식 타임아웃 1.0초).\n'
+fi
 printf '[INFO] 이 터미널의 Ctrl+C도 정지 요청을 보냅니다.\n'
 # Only state transitions are printed now; detailed telemetry is reserved for later.
 python3 "$CHECK" watch --route "$ROUTE"

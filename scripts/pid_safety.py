@@ -123,6 +123,16 @@ def path_gap(route, station, chair_pose, samples):
 class Safety:
     def __init__(self):
         rospy.init_node("pid_safety")
+        self.test_clear = str(rospy.get_param("~test_clear", False)).strip().lower() in (
+            "true", "1", "yes", "on")
+        if self.test_clear:
+            self.policy_pub = rospy.Publisher(
+                "/ff_pid/motion_policy", String, queue_size=2)
+            self.status_pub = rospy.Publisher(
+                "/pid_safety/status", String, queue_size=2)
+            rospy.logwarn("TEST CLEAR ENABLED: obstacle/mask checks disabled")
+            rospy.Timer(rospy.Duration(0.1), self.tick_test_clear)
+            return
         name = str(rospy.get_param("~route"))
         if name not in ROUTES:
             raise rospy.ROSInitException("Invalid route: " + name)
@@ -153,6 +163,13 @@ class Safety:
         rospy.Subscriber("/perception/objects_summary", String,
                          self.on_obstacles, queue_size=3)
         rospy.Timer(rospy.Duration(0.1), self.tick)
+
+    def tick_test_clear(self, _event):
+        self.policy_pub.publish(String(data="CLEAR"))
+        self.status_pub.publish(String(data=json.dumps({
+            "state": "CLEAR", "reason": "TEST_CLEAR_BYPASS",
+            "test_mode": True
+        }, separators=(",", ":"))))
 
     def on_pose(self, msg):
         try:

@@ -153,7 +153,10 @@ base_path="$(rospack find base_model 2>/dev/null || true)"
 if [ "${ALLOW_NONSTANDARD_BASE:-0}" != 1 ] && [ "$base_path" != "$BASE_WS/src/base_model" ]; then
   fail "unexpected base_model path: $base_path (expected $BASE_WS/src/base_model)"
 fi
-base_nodes="$(roslaunch --nodes base_model wheel.launch 2>"$RUN_DIR/base_launch_validation.log")" || fail "base_model/wheel.launch cannot be parsed"
+# Explicit PID-only wheel_cmd configuration. DWA/base_model sources are untouched.
+base_nodes="$(roslaunch --nodes base_model wheel.launch \
+  wheel_separation_m:=0.46 turn_boost:=false cmd_callers:=/ff_pid \
+  2>"$RUN_DIR/base_launch_validation.log")" || fail "base_model/wheel.launch cannot be parsed"
 for node in /uart /wheel_cmd /odom_pub; do
   printf '%s\n' "$base_nodes" | grep -Fxq "$node" || fail "wheel.launch missing $node; inspect $base_path/launch/wheel.launch"
 done
@@ -324,7 +327,8 @@ ok 'GICP dynamic-object exclusions'
 
 # Base launch is NUC-only, validated above; does not start the old follower.
 source_ws "$BASE_WS"
-start_detached base roslaunch base_model wheel.launch
+start_detached base roslaunch base_model wheel.launch \
+  wheel_separation_m:=0.46 turn_boost:=false cmd_callers:=/ff_pid
 wait_topic '/wheel_status' 25 || fail 'wheel_status silent; check serial port/base controller'
 check_node /uart || fail 'UART node missing'
 check_node /wheel_cmd || fail 'wheel_cmd node missing'

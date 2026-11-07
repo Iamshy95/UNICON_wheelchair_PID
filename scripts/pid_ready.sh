@@ -243,10 +243,13 @@ else
 fi
 rosparam set /use_sim_time false
 
-# Record localization, wheel feedback, manual driving and named map marks.
-# The recorder survives Ctrl+C in READY; stop it via pid_ready_bag.sh stop.
-bash "$BAG_HELPER" start "$RUN_DIR" 9>&- || fail "ROS bag recorder could not start"
-ok "ROS bag recording: $RUN_DIR"
+# Recording is optional: a recorder failure must not block sensor/base READY.
+# If available, its process survives READY and is closed by pid_ready_bag.sh stop.
+if bash "$BAG_HELPER" start "$RUN_DIR" 9>&-; then
+  ok "ROS bag recording: $RUN_DIR"
+else
+  warn "ROS bag recording unavailable; continuing READY without recording."
+fi
 
 source_ws "$LIVOX_WS"
 start_detached livox roslaunch livox_ros_driver2 msg_MID360.launch

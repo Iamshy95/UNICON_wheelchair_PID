@@ -38,15 +38,14 @@ fi
 STATE_DIR="${PID_READY_STATE_DIR:-$HOME/.local/state/pid_ready}"
 if [[ -s "$STATE_DIR/latest_run_dir" ]]; then
   IFS= read -r RUN_DIR < "$STATE_DIR/latest_run_dir"
-  for item in ff_pid.pid ff_pid_safety.pid; do
+  for item in ff_pid.pid; do
     [[ -s "$RUN_DIR/$item" ]] || continue
     IFS= read -r pid < "$RUN_DIR/$item"
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
     pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
     [[ "$pgid" == "$pid" ]] || continue
     cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-    if [[ "$item" == ff_pid.pid && "$cmd" == *ff_pid_node.py* ]] ||
-       [[ "$item" == ff_pid_safety.pid && "$cmd" == *pid_motion_safety.py* ]]; then
+    if [[ "$cmd" == *ff_pid_node.py* ]]; then
       kill -TERM -- "-$pgid" 2>/dev/null || true
     fi
   done

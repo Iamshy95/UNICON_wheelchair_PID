@@ -89,13 +89,6 @@ if [[ -f "$BAG_HELPER" ]]; then
   fi
 fi
 
-SAFETY_NODE="$SCRIPT_DIR/pid_motion_safety.py"
-need "$SAFETY_NODE"
-SAFETY_LOG="$RUN_DIR/ff_pid_safety_${ROUTE}.log"
-setsid nohup python3 -u "$SAFETY_NODE" > "$SAFETY_LOG" 2>&1 </dev/null &
-SAFETY_PID=$!
-printf '%s\n' "$SAFETY_PID" > "$RUN_DIR/ff_pid_safety.pid"
-
 LOG="$RUN_DIR/ff_pid_${ROUTE}_$(date +%Y%m%d_%H%M%S).log"
 setsid nohup env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   python3 -u "$NODE" "_route:=$ROUTE" '_body_frame_profile:=builtin' \

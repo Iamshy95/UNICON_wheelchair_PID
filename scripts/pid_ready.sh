@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # UNICON wheelchair — all-day ROS1 readiness stack, NOT autonomous driving.
 # Install in <repo>/src/pid/scripts/ and run ON THE NUC.
-# Usage: bash pid_ready.sh [start|status|watch]
+# Usage: bash pid_ready.sh [start|status|watch|stop]
 #   start:  bring up sensors/localization/perception/base, then watch changes
 #   status: snapshot only; never start/restart nodes
 #   watch:  watch changes only; never start/restart nodes
@@ -9,8 +9,8 @@
 set -Eeuo pipefail
 
 MODE="${1:-start}"
-case "$MODE" in start|status|watch) ;; *) echo "Usage: $0 [start|status|watch]" >&2; exit 64 ;; esac
-[ "$#" -le 1 ] || { echo "Usage: $0 [start|status|watch]" >&2; exit 64; }
+case "$MODE" in start|status|watch|stop) ;; *) echo "Usage: $0 [start|status|watch|stop]" >&2; exit 64 ;; esac
+[ "$#" -le 1 ] || { echo "Usage: $0 [start|status|watch|stop]" >&2; exit 64; }
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
@@ -37,6 +37,7 @@ LOG_BASE="${PID_READY_LOG_DIR:-$HOME/pid_ready_logs}"
 STATE_DIR="${PID_READY_STATE_DIR:-$HOME/.local/state/pid_ready}"
 MONITOR="$SCRIPT_DIR/pid_ready_monitor.py"
 BAG_HELPER="$SCRIPT_DIR/pid_ready_bag.sh"
+SHUTDOWN_HELPER="$SCRIPT_DIR/pid_ready_shutdown.sh"
 
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; NC=$'\033[0m'
 if [ ! -t 1 ] || [ "${NO_COLOR:-0}" = 1 ]; then RED=''; GRN=''; YLW=''; NC=''; fi
@@ -59,6 +60,11 @@ run_monitor() {
   # Only the display process runs in this terminal. ROS children are detached.
   python3 -u "$MONITOR" "--$1"
 }
+
+if [ "$MODE" = stop ]; then
+  require_file "$SHUTDOWN_HELPER"
+  exec bash "$SHUTDOWN_HELPER"
+fi
 
 if [ "$MODE" = status ] || [ "$MODE" = watch ]; then
   timeout 3 rosparam list >/dev/null 2>&1 || fail "ROS Master not reachable: $ROS_MASTER_URI"
@@ -99,7 +105,7 @@ RUN_DIR="$LOG_BASE/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$RUN_DIR"
 PIDS="$RUN_DIR/started_pids.tsv"
 : > "$PIDS"
-printf '%s\n' "$RUN_DIR" > "$STATE_DIR/latest_run_dir"
+# latest_run_dir is updated only AFTER conflict checks
 
 # No sweeps, pkill, or auto takeover of a running wheelchair.
 # If an earlier session is active, use 'watch' rather than starting over.
@@ -167,7 +173,7 @@ wait_topic() {
 check_node() {
   local node="$1" i
   for ((i=0;i<12;i++)); do
-    timeout 3 rosnode ping -c1 "$node" >/dev/null 2>&1 && return 0
+    timeout 3 rosnode list 2>/dev/null | grep -Fx "$node" >/dev/null && return 0
     sleep 1
   done
   return 1
@@ -179,7 +185,7 @@ start_detached() {
   # not terminate the sensors, the localizer or the base.
   setsid nohup env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
     NUMEXPR_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
-    "$@" > "$RUN_DIR/$name.log" 2>&1 < /dev/null &
+    "$@" > "$RUN_DIR/$name.log" 2>&1 < /dev/null 9>&- &
   local pid=$!
   printf '%s\t%s\n' "$name" "$pid" >> "$PIDS"
   sleep 0.2
@@ -191,17 +197,20 @@ start_detached() {
 on_failure() {
   local code=$?
   trap - EXIT
-  if [ "$code" = 0 ]; then return 0; fi
-  warn "startup failed ($code); existing detached nodes may still be running"
-  warn "logs: $RUN_DIR"
-  if timeout 2 rosnode ping -c1 /uart >/dev/null 2>&1; then
-    timeout 4 rostopic pub -1 /mode_cmd std_msgs/Int16 'data: 77' >/dev/null 2>&1 || true
-    warn "sent MANUAL request; verify the physical joystick/E-stop"
+  [[ "$code" -ne 0 ]] || return 0
+  warn "READY startup failed ($code); rolling back this run: $RUN_DIR"
+  if master_alive; then
+    timeout 3 rostopic pub -1 /mode_cmd std_msgs/Int16 'data: 77' >/dev/null 2>&1 || true
   fi
-  warn "Do not rerun 'start' over surviving nodes. Investigate logs first."
+  bash "$SHUTDOWN_HELPER" --startup-failure "$RUN_DIR" 9>&- || \
+    warn "rollback incomplete; see $RUN_DIR and verify the chair physically"
   exit "$code"
 }
+printf '%s\n' "$RUN_DIR" > "$STATE_DIR/latest_run_dir"
 trap on_failure EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 msg '=================================================='
 msg '               UNICON PID READY'
@@ -236,7 +245,7 @@ rosparam set /use_sim_time false
 
 # Record localization, wheel feedback, manual driving and named map marks.
 # The recorder survives Ctrl+C in READY; stop it via pid_ready_bag.sh stop.
-bash "$BAG_HELPER" start "$RUN_DIR" || fail "ROS bag recorder could not start"
+bash "$BAG_HELPER" start "$RUN_DIR" 9>&- || fail "ROS bag recorder could not start"
 ok "ROS bag recording: $RUN_DIR"
 
 source_ws "$LIVOX_WS"
@@ -342,11 +351,9 @@ msg 'SYSTEM READY — DRIVE NOT STARTED'
 msg 'FF-PID must be started separately; existing SafetyGate/TipGuard are NOT active.'
 msg 'A real operator-controlled physical stop/joystick must be verified before motion.'
 msg "View logs: $RUN_DIR"
-msg 'Ctrl+C stops this DISPLAY only; ROS nodes continue.'
-msg 'Reattach later: bash pid_ready.sh watch'
+msg 'READY START completed. This command returns; nodes stay running.'
+msg 'Status: bash pid_ready.sh status   Watch: bash pid_ready.sh watch'
+msg 'Full shutdown: bash pid_ready.sh stop'
 msg '--------------------------------------------------'
-
-# The event monitor only subscribes; it never publishes a drive command.
 trap - EXIT
-run_monitor status
-run_monitor watch
+exit 0

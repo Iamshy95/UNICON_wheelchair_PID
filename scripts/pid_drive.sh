@@ -69,7 +69,7 @@ loc_path="$(rospack find static_livox_localization 2>/dev/null || true)"
 [[ "$(readlink -f "$pid_path")" == "$(readlink -f "$REPO_ROOT/src/pid")" ]] || fail "잘못된 pid 패키지 경로: $pid_path"
 [[ "$(readlink -f "$loc_path")" == "$(readlink -f "$REPO_ROOT/src/static_livox_localization")" ]] || fail "잘못된 localization 패키지 경로: $loc_path"
 
-if timeout 3 rosnode ping -c1 /ff_pid >/dev/null 2>&1; then
+if timeout 3 rosnode list 2>/dev/null | grep -Fx /ff_pid >/dev/null; then
   fail '/ff_pid가 이미 실행 중입니다. 중복 실행을 막았습니다. 중지하려면 pid_stop.sh를 실행하세요.'
 fi
 info="$(timeout 5 rostopic info /cmd_vel 2>/dev/null || true)"
@@ -89,22 +89,30 @@ if [[ -f "$BAG_HELPER" ]]; then
   fi
 fi
 
+SAFETY_NODE="$SCRIPT_DIR/pid_motion_safety.py"
+need "$SAFETY_NODE"
+SAFETY_LOG="$RUN_DIR/ff_pid_safety_${ROUTE}.log"
+setsid nohup python3 -u "$SAFETY_NODE" > "$SAFETY_LOG" 2>&1 </dev/null &
+SAFETY_PID=$!
+printf '%s\n' "$SAFETY_PID" > "$RUN_DIR/ff_pid_safety.pid"
+
 LOG="$RUN_DIR/ff_pid_${ROUTE}_$(date +%Y%m%d_%H%M%S).log"
 setsid nohup env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   python3 -u "$NODE" "_route:=$ROUTE" '_body_frame_profile:=builtin' \
   > "$LOG" 2>&1 < /dev/null &
 NODE_PID=$!
+printf '%s\n' "$NODE_PID" > "$RUN_DIR/ff_pid.pid"
 
 ready=0
 for ((i=0; i<35; i++)); do
   if timeout 2 rosservice info /ff_pid/start >/dev/null 2>&1 &&
-     timeout 2 rosnode ping -c1 /ff_pid >/dev/null 2>&1; then
+     timeout 2 rosnode list 2>/dev/null | grep -Fx /ff_pid >/dev/null; then
     ready=1; break
   fi
   kill -0 "$NODE_PID" 2>/dev/null || break
   sleep 0.3
 done
-[[ "$ready" == 1 ]] || fail "FF-PD 노드 시작 실패. 로그: $LOG"
+[[ "$ready" == 1 ]] || { bash "$STOP" >/dev/null 2>&1 || true; fail "FF-PD 노드 시작 실패. 로그: $LOG"; }
 
 ARMED=1
 safe_stop_on_exit() {

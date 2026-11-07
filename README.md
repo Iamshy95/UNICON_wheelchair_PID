@@ -6,6 +6,29 @@ ROS1 Noetic 기반 전동휠체어의 **정합 → 주행 → 정지**, 제어 �
 >
 > **동기화 기준:** NUC에 분리 배포한 팀 저장소 `feature/ffpid`, 커밋 `aadc8d1` (2026-11-06). 이후 README 수정은 기존 NUC 배포를 자동 변경하지 않습니다.
 
+## 2026-11-07 FF–PD 실험 모드 (개인 저장소 최신 코드)
+
+다음 내용은 **개인 저장소의 변경 사항**입니다. NUC의 기존 배포본 및 팀 저장소에 자동 반영되지 않습니다. NUC에 복사/동기화한 FF–PD 배포본에서만 적용됩니다.
+
+- `pid_ready.sh`: 공유 `base_model wheel.launch`를 **한 번만 실행**하며, 해당 실행 인자로 `wheel_separation_m:=0.46 turn_boost:=false cmd_callers:=/ff_pid`를 명시합니다. 팀원 DWA의 0.54m 설정이나 `base_model` 원본 파일은 변경하지 않습니다. 0.46m는 제어기와 구동 명령 변환에 사용하는 유효 간격이며, 차체 실제 폭 0.60m와 다른 개념입니다.
+- `pid_drive.sh A_to_D5 --test-clear`: 테스트 모드에서 `pid_safety.py`가 **10Hz CLEAR만 발행**합니다. 장애물·예측 마스크 경계 Safety 판단을 실행하지 않습니다. 단 FF–PD Node 자체의 현재 위치 마스크 포함, GICP, 바퀴 상태, 모드 확인과 정지 경로는 유지합니다.
+- `pid_drive.sh A_to_D5`: 일반 모드에서는 기존 Safety 판단을 사용합니다. ROS private 파라미터 `~test_clear`는 시작할 때마다 **false로 명시적으로 초기화**하므로 이전 테스트 설정이 남지 않습니다.
+- `pid_stop.sh`: FF–PD와 Safety 노드를 종료하며 READY의 센서·정합·구동부는 유지합니다.
+
+**테스트 실행 예 (NUC 배포 완료 후):**
+
+```bash
+D="$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106"
+bash "$D/source-linux/src/pid/scripts/pid_ready.sh"
+bash "$D/source-linux/src/pid/scripts/pid_drive.sh" A_to_D5 --test-clear
+# 종료는 별도 터미널에서:
+bash "$D/source-linux/src/pid/scripts/pid_stop.sh"
+```
+
+위 `D`는 과거 배포 경로의 예시입니다. **실제 코드가 갱신된 배포 디렉터리**를 지정해야 합니다. NUC에 아직 배포하지 않은 상태에서는 위 명령만으로 변경 사항이 실행되지 않습니다. 오늘의 테스트 모드는 장애물 자동 STOP을 의도적으로 비활성화하므로 보행자·장애물이 없는 통제 구간과 즉시 조작 가능한 물리적 정지 수단이 필요합니다. 별도 실차 주행 검증은 완료되지 않았습니다.
+
+---
+
 ## 1. 명령어 빠른 참조
 
 아래 명령어는 **NUC에 별도로 배포한 `ffpid-aadc8d1-20261106`** 기준입니다. GitHub에 푸시해도 NUC의 `current` 배포본은 자동으로 바뀌지 않습니다.

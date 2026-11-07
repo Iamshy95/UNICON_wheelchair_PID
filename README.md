@@ -40,30 +40,15 @@ source "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/ws/devel/setup.bash"
 
 ### READY 전체 종료 (주행 정지와 별개)
 
-`pid_stop.sh`는 FF–PD 주행만 정지합니다. `pid_ready.sh`로 시작된 LiDAR·FAST-LIO·GICP·인지·UART·ROS Master 및 ROS bag은 계속 남습니다. 특히 READY 실패 후에는 `start.lock`을 보유한 프로세스 때문에 다음 READY 시작이 차단될 수 있습니다. `Ctrl+C`는 상태 표시만 종료합니다.
-
-개인 저장소에 추가한 [`scripts/pid_ready_shutdown.sh`](scripts/pid_ready_shutdown.sh)는 최신 READY 실행 기록에 있는 **프로세스 그룹만** 정리하고, 가능한 경우 ROS bag을 정상 종료합니다. NUC에서 한번 다운로드:
+주행 종료는 `pid_stop.sh`, READY가 준비한 LiDAR·FAST-LIO·GICP·구동부·ROS bag 전체 종료는 `pid_ready.sh stop`으로 수행합니다.
 
 ```bash
-curl -fL --retry 2 \
-  https://raw.githubusercontent.com/Iamshy95/UNICON_wheelchair_PID/main/scripts/pid_ready_shutdown.sh \
-  -o "$HOME/pid_ready_shutdown.sh"
-bash -n "$HOME/pid_ready_shutdown.sh"
+D="$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106"
+bash "$D/source-linux/src/pid/scripts/pid_stop.sh"
+bash "$D/source-linux/src/pid/scripts/pid_ready.sh" stop
 ```
 
-**실행 전 휠체어가 실제로 정지했고 물리적으로 MANUAL 상태인지 확인하세요.** 자동 종료 스크립트는 ROS Master를 통해 FF–PD가 실행 중인 경우 우선 정지하고, 바퀴 상태를 확인한 후 하드웨어 노드를 종료합니다. 확인할 수 없는 상황에서는 종료를 중단합니다. 소프트웨어 정지는 물리적 긴급정지를 대신하지 않습니다.
-
-```bash
-bash "$HOME/pid_ready_shutdown.sh"
-```
-
-기존 ROS Master가 이미 종료되어 정차 검증을 할 수 없는 경우에는 자동 종료가 중단됩니다. 물리적 정차·MANUAL 확인 후 남은 기록 프로세스를 별도 점검해야 합니다. `start.lock` 파일 자체를 삭제하지 마세요.
-
-ROS bag **녹화만** 정지하려면:
-
-```bash
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" stop
-```
+기존 `$HOME/pid_ready_shutdown.sh` 별도 다운로드 방식은 현재 소스 버전과 달라 사용하지 않습니다. READY 실패 시에도 해당 실행이 생성한 프로세스의 종료를 시도하며, 완료된 실행 기록은 활성 상태에서 해제합니다. 프로세스 종료가 물리적 정차를 보증하지는 않습니다.
 
 ### 센서 데이터 확인
 
@@ -234,9 +219,11 @@ bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scrip
 ## 3. FF–PD 제어 방식
 
 - **Feedforward:** 전방 경로 곡률을 사용해 선제적으로 각속도를 계산합니다.
-- **PD Feedback:** 예측된 횡방향 경로 추종 오차(CTE)와 오차 변화율로 조향을 보정합니다.
+- **PD Feedback:** 예측 CTE와 시간당 오차 변화율로 목표 곡률을 보정하고 목표 선속도를 곱해 각속도 명령으로 변환합니다. Core는 Node의 50Hz 타이머에서 호출됩니다.
 - **커브 감속:** 현재 위치 전방 구간에서 절대 곡률 상위 20%의 평균을 구하고, 횡가속도·각속도 제한을 적용해 목표 속도를 낮춥니다.
-- **제약 및 HOLD:** 바퀴 속도 제약, 경로 이탈, 위치추정 상태 오류 등 주행 조건이 맞지 않으면 정지 또는 HOLD 상태로 전환합니다.
+- **바퀴 속도 제한:** 제어 각속도를 허용 범위 내로 포화시킵니다. 데이터 끊김은 Node에서 정지 요청합니다. **경로 이탈·장애물 판단을 담당할 새로운 `pid_safety.py`는 아직 구현하지 않았습니다.**
+
+현재 곡률 감속과 Pitch 보정은 Core에 유지합니다. 새 `pid_safety.py`는 설계 전이며, 이전에 임의로 만든 `pid_motion_safety.py` 및 DRIVE 자동 실행은 제거됐습니다.
 
 ### 현재 기본 제어 파라미터
 
@@ -256,7 +243,7 @@ bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scrip
 | `CURVATURE_PREVIEW_M` | 2.0 | 전방 곡률 확인 거리 (m) |
 | `CTE_DEADZONE_M` | 0.20 | CTE 데드존 (m) |
 | `D_DEADZONE_MPS` | 0.02 | D항 입력 데드존 (m/s) |
-| `D_CLAMP_RAD_S` | 0.15 | D항 기여 각속도 제한 (rad/s) |
+| `D_CLAMP_RAD_S` | 0.15 | 기존 이름: D항 곡률 보정값 제한 |
 
 수정된 Python 소스는 **현재 실행 중인 제어기에 즉시 반영되지 않습니다.** 정지 후 DRIVE를 다시 실행해야 하며, 별도의 `catkin_make`는 일반적으로 필요하지 않습니다. C++ 코드나 ROS 메시지 정의 등 빌드 대상이 변경되면 빌드가 필요할 수 있습니다.
 
@@ -272,7 +259,7 @@ bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scrip
 | MANUAL ↔ AUTO 전환 | 변화 발생 시 |
 | 장애물 인식·소멸 | 인식 상태 변경 시 |
 | ROS bag 녹화 중단·재개 | 변화 발생 시 |
-| 주행 RUNNING / HOLD / 종료 | 상태 변경 시 |
+| 주행 RUNNING / 정지 / 오류 / 종료 | 상태 변경 시 |
 | 주행 진행률 | 주행 중 약 30초마다 |
 | 현재 위치 | 사용자가 `position` 명령을 실행할 때 |
 | 목표·실제 선속도, 각속도, CTE | 정상 주행 중 상시 출력하지 않음 |

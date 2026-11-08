@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UNICON FF–PD ROS1 실행 노드.
+"""UNICON FF–PD–Yaw ROS1 실행 노드.
 
 /ff_pid/start=True 명령 전까지 주행하지 않습니다.
 실제 /cmd_vel을 발행하므로 NUC wheel_cmd_tmp.py가 /ff_pid를 허용해야 합니다.
@@ -143,6 +143,14 @@ class FFNode:
             kp=float(rospy.get_param("~kp", core_settings.KP)),
             kd=float(rospy.get_param("~kd", core_settings.KD)),
             ki=float(rospy.get_param("~ki", core_settings.KI)),
+            ff_gain=float(rospy.get_param("~ff_gain", core_settings.FF_GAIN)),
+            ff_preview_waypoints=int(rospy.get_param(
+                "~ff_preview_waypoints", core_settings.FF_PREVIEW_WAYPOINTS)),
+            yaw_gain=float(rospy.get_param("~yaw_gain", core_settings.YAW_GAIN)),
+            yaw_deadzone_deg=float(rospy.get_param(
+                "~yaw_deadzone_deg", core_settings.YAW_DEADZONE_DEG)),
+            yaw_curvature_scale_m=float(rospy.get_param(
+                "~yaw_curvature_scale_m", core_settings.YAW_CURVATURE_SCALE_M)),
             max_v=float(rospy.get_param("~max_v", core_settings.MAX_V_MPS)),
             max_w=float(rospy.get_param("~max_w", core_settings.MAX_W_RAD_S)),
             wheel_track=core_settings.WHEEL_TRACK_M,  # 구동부 0.46m와 항상 일치

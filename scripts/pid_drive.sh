@@ -87,6 +87,11 @@ fi
 # Read-only preflight. Compares chair pose with the WHOLE selected route, not its START waypoint.
 python3 "$MONITOR" --check-ready || fail 'READY 점검 실패. 수동 모드를 유지합니다.'
 python3 "$CHECK" wheel --mode MANUAL --stopped || fail 'MANUAL 정차 상태를 확인할 수 없습니다.'
+# Require a compatible pose anywhere on the selected route before launching FF-PD.
+# The check prints turn-first, approach-second guidance on refusal.
+python3 "$CHECK" pose-on-route --route "$ROUTE" \
+  --max-distance 1.0 --max-heading-rad 0.5235987756 || \
+  fail '선택 경로와 위치/방향이 맞지 않습니다. MANUAL로 위치를 조정한 뒤 재시도하세요.'
 
 if [[ -f "$BAG_HELPER" ]]; then
   bag_status="$(bash "$BAG_HELPER" status 2>&1 || true)"

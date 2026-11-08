@@ -325,10 +325,19 @@ class FFNode:
             self.speed_limit_mps = cap
             self.policy_received = now
             if state == "STOP":
+                # Only a cleared physical obstacle may trigger automatic resume.
+                # Perception faults, bad geometry and mask boundary faults require
+                # an explicit new /ff_pid/start after the fault is resolved.
+                can_resume = data.get("reason") in (
+                    "PATH_OBSTACLE", "VERY_CLOSE_OBJECT", "RELEASE_CONFIRM")
                 if self.enabled:
-                    self.resume_after_obstacle = True
-                    self.obstacle_stopped = True
-                    self.disable("OBSTACLE_STOP")
+                    self.resume_after_obstacle = can_resume
+                    self.obstacle_stopped = can_resume
+                    self.disable("OBSTACLE_STOP" if can_resume else
+                                 "SAFETY_STOP: " + str(data.get("reason", "UNKNOWN")))
+                elif not can_resume:
+                    self.resume_after_obstacle = False
+                    self.obstacle_stopped = False
             elif self.obstacle_stopped and self.resume_after_obstacle and not self.external_hold:
                 if self.readiness(now) is None:
                     self.core.reset()

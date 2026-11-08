@@ -38,7 +38,7 @@ PITCH_HILL_DEG = 2.0
 PITCH_STEEP_DEG = 4.0       # 감속 판단 시 참조할 전방 경로 길이 [m]
 CTE_DEADZONE_M = 0.10           # 작은 횡방향 오차를 무시하는 구간 [m]
 D_DEADZONE_MPS = 0.02            # D항 입력(CTE 변화율) 데드존 [m/s]
-D_CLAMP_RAD_S = 0.15             # D항 단독 조향 기여량 제한 [rad/s]
+D_CLAMP_CURVATURE_INV_M = 0.15     # D항 곡률 제한 [1/m]; 최종 각속도 기여는 v를 곱함
 LINEAR_ACCEL_LIMIT_MPS2 = 0.80   # RUNNING 선가속도 제한 [m/s²]; 일반 감속은 제한 없음
 ANGULAR_ACCEL_LIMIT_RAD_S2 = 2.00  # RUNNING 각속도 변화율 제한 [rad/s²]
 COMMAND_LIMIT_MAX_DT_S = 0.05    # 제어 루프 지연 시 한 번의 큰 명령 점프 방지
@@ -49,6 +49,9 @@ PREDICTION_MEASURED_S = 0.10     # 예측 초기 측정 바퀴 속도를 사용�
 PREDICTION_STEP_S = 0.02         # 예측기 내부 수치 적분 간격 [s]
 PREDICTION_DELAY_S = 0.50        # 명령 반영 지연 가정 [s]; 실측 검증 필요
 # ================================================================
+
+# 과거 식별자와의 호환성만 유지합니다. 실제 단위는 rad/s가 아니라 [1/m]입니다.
+D_CLAMP_RAD_S = D_CLAMP_CURVATURE_INV_M
 
 
 def wrap(a):
@@ -62,7 +65,8 @@ def deadzone(x, width):
 def limit_running_command(previous_v, previous_w, target_v, target_w, dt,
                           wheel_track, min_wheel, max_wheel,
                           linear_accel=LINEAR_ACCEL_LIMIT_MPS2,
-                          angular_accel=ANGULAR_ACCEL_LIMIT_RAD_S2):
+                          angular_accel=ANGULAR_ACCEL_LIMIT_RAD_S2,
+                          diagnostics=None):
     """Slew-limit normal RUNNING commands only; fault/STOP bypasses this function.
 
     Linear acceleration and angular velocity changes are limited. Normal
@@ -88,10 +92,27 @@ def limit_running_command(previous_v, previous_w, target_v, target_w, dt,
     allowed_w = max(0.0, min(
         2.0 * (v - min_wheel) / wheel_track,
         2.0 * (max_wheel - v) / wheel_track))
+    target_w_before_wheel_clip = target_w
     target_w = max(-allowed_w, min(allowed_w, target_w))
     max_change = angular_accel * step
-    w = previous_w + max(-max_change, min(max_change, target_w - previous_w))
-    w = max(-allowed_w, min(allowed_w, w))
+    w_before_final_wheel_clip = previous_w + max(
+        -max_change, min(max_change, target_w - previous_w))
+    w = max(-allowed_w, min(allowed_w, w_before_final_wheel_clip))
+    if diagnostics is not None:
+        diagnostics.update({
+            "limiter_dt_s": step,
+            "limiter_previous_v_mps": previous_v,
+            "limiter_previous_w_rad_s": previous_w,
+            "limiter_target_v_mps": target_v,
+            "limiter_target_w_rad_s": target_w_before_wheel_clip,
+            "limiter_allowed_w_rad_s": allowed_w,
+            "limiter_w_after_wheel_clip_rad_s": target_w,
+            "limiter_w_after_angular_slew_rad_s": w_before_final_wheel_clip,
+            "limiter_v_accel_limited": bool(target_v > v + 1e-12),
+            "limiter_w_wheel_clipped": bool(abs(target_w_before_wheel_clip - target_w) > 1e-12),
+            "limiter_w_slew_limited": bool(abs(target_w - w_before_final_wheel_clip) > 1e-12),
+            "limiter_w_final_wheel_clipped": bool(abs(w_before_final_wheel_clip - w) > 1e-12),
+        })
     return v, w
 
 
@@ -238,7 +259,7 @@ class FFPD:
                  min_wheel=MIN_WHEEL_MPS, max_wheel=MAX_WHEEL_MPS,
                  lateral_accel=LATERAL_ACCEL_MPS2, preview_m=CURVATURE_PREVIEW_M,
                  cte_deadzone=CTE_DEADZONE_M, d_deadzone=D_DEADZONE_MPS,
-                 d_limit=D_CLAMP_RAD_S,
+                 d_limit=D_CLAMP_CURVATURE_INV_M,
                  prediction_horizon_s=PREDICTION_HORIZON_S,
                  prediction_measured_s=PREDICTION_MEASURED_S,
                  prediction_step_s=PREDICTION_STEP_S,
@@ -281,6 +302,8 @@ class FFPD:
         self.last_observation_time = None
         self.last_derivative_error = None
         self.derivative = 0.0
+        self.derivative_raw = 0.0
+        self.derivative_sample_dt_s = None
 
     def reset(self):
         self.station = None
@@ -291,6 +314,8 @@ class FFPD:
         self.last_observation_time = None
         self.last_derivative_error = None
         self.derivative = 0.0
+        self.derivative_raw = 0.0
+        self.derivative_sample_dt_s = None
 
     def step(self, pose, measured, now, dt, observation_id=None,
              observation_time=None, motion_policy="CLEAR", pitch_deg=0.0):
@@ -311,21 +336,30 @@ class FFPD:
         predicted_station, raw_error, predicted_distance, predicted_tangent = self.route.project(
             predicted[0], predicted[1], self.station)
         error = deadzone(raw_error, self.cte_deadzone)
+        derivative_updated = False
         # D is updated on a new global pose observation, using its real interval.
         if observation_id is not None and observation_id != self.last_observation_id:
             stamp = float(observation_time) if observation_time is not None else float(now)
             if self.last_observation_time is not None and stamp > self.last_observation_time:
                 sample_dt = stamp - self.last_observation_time
                 raw_de = (error - self.last_derivative_error) / sample_dt
+                self.derivative_raw = raw_de
+                self.derivative_sample_dt_s = sample_dt
                 self.derivative = deadzone(raw_de, self.d_deadzone)
             else:
+                self.derivative_raw = 0.0
+                self.derivative_sample_dt_s = None
                 self.derivative = 0.0
+            derivative_updated = True
             self.last_derivative_error = error
             self.last_observation_time = stamp
             self.last_observation_id = observation_id
         elif observation_id is None:
-            self.derivative = deadzone(
-                (error - self.prev_error) / dt, self.d_deadzone) if self.prev_error is not None else 0.0
+            self.derivative_raw = ((error - self.prev_error) / dt
+                                   if self.prev_error is not None else 0.0)
+            self.derivative_sample_dt_s = dt if self.prev_error is not None else None
+            self.derivative = deadzone(self.derivative_raw, self.d_deadzone)
+            derivative_updated = True
         self.prev_error = error
         self.integral = float(np.clip(self.integral + error * dt, -0.5, 0.5))
 
@@ -338,8 +372,9 @@ class FFPD:
         predicted_yaw_error = wrap(predicted[2] - predicted_tangent)
         yaw_weight = 1.0 / (1.0 + self.yaw_curvature_scale_m *
                             abs(self.route.kappa(predicted_station)))
-        yaw_rate = (-self.yaw_gain * yaw_weight *
-                    deadzone(predicted_yaw_error, math.radians(self.yaw_deadzone_deg)))
+        yaw_error_after_deadzone = deadzone(
+            predicted_yaw_error, math.radians(self.yaw_deadzone_deg))
+        yaw_rate = -self.yaw_gain * yaw_weight * yaw_error_after_deadzone
         k_preview = self.route.top20_abs_curvature(self.station, self.preview_m)
         v_cruise = self.max_v
         if k_preview > 1e-4:
@@ -359,8 +394,8 @@ class FFPD:
 
         # PD corrects route curvature, with time-based derivative.
         k_p = -self.kp * error
-        k_d = float(np.clip(-self.kd * self.derivative,
-                            -self.d_limit, self.d_limit))
+        k_d_before_clamp = -self.kd * self.derivative
+        k_d = float(np.clip(k_d_before_clamp, -self.d_limit, self.d_limit))
         k_i = -self.ki * self.integral
         # Always calculate FF-PD; low measured speed limits the final yaw rate below.
         k_cmd = self.ff_gain * k_ff + k_p + k_d + k_i
@@ -382,16 +417,33 @@ class FFPD:
                 "station": self.station, "cte": cte, "distance": distance,
                 "heading_error": heading_error,
                 "predicted_cte": raw_error,
+                "cte_after_deadzone_m": error,
+                "d_raw_cte_rate_mps": self.derivative_raw,
+                "d_after_deadzone_cte_rate_mps": self.derivative,
+                "d_sample_dt_s": self.derivative_sample_dt_s,
+                "d_recomputed": derivative_updated,
+                "d_curvature_before_clamp_inv_m": k_d_before_clamp,
+                "d_curvature_after_clamp_inv_m": k_d,
+                "d_curvature_clamped": bool(abs(k_d_before_clamp - k_d) > 1e-12),
                 "predicted_distance": predicted_distance,
                 "predicted_station": predicted_station,
                 "predicted_heading_error": predicted_yaw_error,
+                "yaw_error_after_deadzone_rad": yaw_error_after_deadzone,
                 "yaw_weight": yaw_weight,
+                "yaw_path_curvature_inv_m": self.route.kappa(predicted_station),
                 "ff_waypoint_index": ff_waypoint_index,
                 "ff_waypoint_station": float(self.route.s[ff_waypoint_index]),
+                "ff_preview_waypoints": self.ff_preview_waypoints,
+                "ff_curvature_inv_m": k_ff,
                 "preview_curvature_top20": k_preview,
+                "v_cruise_mps": v_cruise,
                 "ff": v * self.ff_gain * k_ff, "p": v * k_p, "i": v * k_i,
                 "d": v * k_d, "yaw": yaw_rate,
                 "k_cmd": k_cmd, "k_ff": k_ff, "k_p": k_p, "k_d": k_d,
+                "requested_w_rad_s": requested_w,
+                "core_allowed_w_rad_s": allowable_w,
+                "core_wheel_clipped": bool(abs(requested_w - w) > 1e-12),
+                "v_for_steering_mps": v_for_steering,
                 "steering_state": steering_state, "motion_policy": motion_policy,
                 "pitch_deg": float(pitch_deg), "slow_speed_mps": slow_speed,
                 "vl": vl, "vr": vr, "predicted_pose": predicted}

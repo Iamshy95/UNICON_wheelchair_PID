@@ -138,6 +138,33 @@ timeout 5 rostopic echo -n1 /pid_safety/status >/dev/null 2>&1 || {
   bash "$STOP" >/dev/null 2>&1 || true
   fail "Safety 상태를 받지 못했습니다. 로그: $SAFETY_LOG"
 }
+# An active process is insufficient: wait for a fresh valid policy before AUTO.
+if [[ "$TEST_CLEAR" != true ]]; then
+  if ! python3 - "$ROUTE" <<'PY'
+import json, sys, time
+import rospy
+from std_msgs.msg import String
+route = sys.argv[1]
+rospy.init_node("pid_safety_preflight", anonymous=True, disable_signals=True)
+deadline = time.monotonic() + 6.0
+while time.monotonic() < deadline:
+    try:
+        msg = rospy.wait_for_message("/ff_pid/motion_policy", String, timeout=1.0)
+        data = json.loads(msg.data)
+        now = rospy.Time.now().to_sec()
+        if (data.get("route") == route and data.get("state") in ("CLEAR", "SLOW")
+                and abs(now - float(data["stamp"])) <= 0.5
+                and 0.0 < float(data["speed_limit_mps"]) <= 0.8):
+            sys.exit(0)
+    except (rospy.ROSException, KeyError, TypeError, ValueError):
+        pass
+sys.exit(1)
+PY
+  then
+    bash "$STOP" >/dev/null 2>&1 || true
+    fail "Safety가 주행 가능한 최신 정책을 발행하지 않았습니다. 로그: $SAFETY_LOG"
+  fi
+fi
 
 ARMED=1
 safe_stop_on_exit() {

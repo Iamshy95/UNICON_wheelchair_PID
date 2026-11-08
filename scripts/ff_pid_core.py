@@ -28,14 +28,7 @@ MAX_W_RAD_S = 0.60               # 휠체어 최대 각속도 [rad/s]
 WHEEL_TRACK_M = 0.46             # 유효 바퀴 간격 [m]; NUC 구동부와 동일해야 함
 MIN_WHEEL_MPS = 0.30             # 좌·우 각각의 바퀴 최소 구동 속도 [m/s]
 MAX_WHEEL_MPS = 1.00             # 좌·우 각각의 바퀴 최대 구동 속도 [m/s]
-LATERAL_ACCEL_MPS2 = 0.15        # 커브 감속에 사용할 횡가속도 제한 [m/s²]
-CURVATURE_PREVIEW_M = 2.0
-CRUISE_MIN_MPS = 0.60
-SLOW_FLAT_MPS = 0.40
-SLOW_HILL_MPS = 0.50
-SLOW_STEEP_MPS = 0.60
-PITCH_HILL_DEG = 2.0
-PITCH_STEEP_DEG = 4.0       # 감속 판단 시 참조할 전방 경로 길이 [m]
+# 곡률·CTE 속도 상한과 SLOW 속도 계획은 Safety에서 수행합니다.
 CTE_DEADZONE_M = 0.10           # 작은 횡방향 오차를 무시하는 구간 [m]
 D_DEADZONE_MPS = 0.02            # D항 입력(CTE 변화율) 데드존 [m/s]
 D_CLAMP_CURVATURE_INV_M = 0.15     # D항 곡률 제한 [1/m]; 최종 각속도 기여는 v를 곱함
@@ -257,7 +250,6 @@ class FFPD:
                  yaw_curvature_scale_m=YAW_CURVATURE_SCALE_M,
                  max_v=MAX_V_MPS, max_w=MAX_W_RAD_S, wheel_track=WHEEL_TRACK_M,
                  min_wheel=MIN_WHEEL_MPS, max_wheel=MAX_WHEEL_MPS,
-                 lateral_accel=LATERAL_ACCEL_MPS2, preview_m=CURVATURE_PREVIEW_M,
                  cte_deadzone=CTE_DEADZONE_M, d_deadzone=D_DEADZONE_MPS,
                  d_limit=D_CLAMP_CURVATURE_INV_M,
                  prediction_horizon_s=PREDICTION_HORIZON_S,
@@ -272,17 +264,16 @@ class FFPD:
         self.yaw_curvature_scale_m = yaw_curvature_scale_m
         self.max_v, self.max_w = max_v, max_w
         self.wheel_track, self.min_wheel, self.max_wheel = wheel_track, min_wheel, max_wheel
-        self.lateral_accel, self.preview_m = lateral_accel, preview_m
         self.cte_deadzone, self.d_deadzone, self.d_limit = cte_deadzone, d_deadzone, d_limit
         params = (kp, kd, ki, max_v, max_w, wheel_track, min_wheel,
-                  max_wheel, lateral_accel, preview_m, cte_deadzone,
+                  max_wheel, cte_deadzone,
                   d_deadzone, d_limit, ff_gain, yaw_gain,
                   yaw_deadzone_deg, yaw_curvature_scale_m)
         if not all(math.isfinite(float(p)) for p in params):
             raise ValueError("controller parameters must be finite")
         if not (0 <= min_wheel < max_wheel and 0 < max_v <= max_wheel
-                and 0 < max_w and wheel_track > 0 and lateral_accel > 0
-                and preview_m > 0 and cte_deadzone >= 0 and d_deadzone >= 0
+                and 0 < max_w and wheel_track > 0
+                and cte_deadzone >= 0 and d_deadzone >= 0
                 and d_limit >= 0 and kp >= 0 and kd >= 0 and ki >= 0
                 and ff_gain >= 0 and yaw_gain >= 0
                 and 0 <= yaw_deadzone_deg <= 180 and yaw_curvature_scale_m >= 0
@@ -318,7 +309,8 @@ class FFPD:
         self.derivative_sample_dt_s = None
 
     def step(self, pose, measured, now, dt, observation_id=None,
-             observation_time=None, motion_policy="CLEAR", pitch_deg=0.0):
+             observation_time=None, motion_policy="CLEAR", pitch_deg=0.0,
+             speed_limit_mps=None):
         """다음 선속도·각속도 명령과 제어 진단값을 계산합니다.
 
         물리적인 바퀴 속도 제약을 만족하지 못하면 feasible=False로 반환합니다.
@@ -329,6 +321,15 @@ class FFPD:
             raise ValueError("bad dt/pose/velocity/pitch")
         if motion_policy not in ("CLEAR", "SLOW", "STOP"):
             raise ValueError("invalid obstacle policy")
+        if speed_limit_mps is None:
+            if motion_policy != "STOP":
+                raise ValueError("speed ceiling required for CLEAR/SLOW")
+            speed_limit_mps = 0.0
+        speed_limit_mps = float(speed_limit_mps)
+        if not math.isfinite(speed_limit_mps) or not 0 <= speed_limit_mps <= self.max_v:
+            raise ValueError("invalid safety speed ceiling")
+        if (motion_policy == "STOP") != (speed_limit_mps == 0):
+            raise ValueError("STOP must have zero ceiling; CLEAR/SLOW must be positive")
         x, y, yaw = pose
         self.station, cte, distance, tangent = self.route.project(x, y, self.station)
         heading_error = wrap(yaw - tangent)
@@ -375,22 +376,9 @@ class FFPD:
         yaw_error_after_deadzone = deadzone(
             predicted_yaw_error, math.radians(self.yaw_deadzone_deg))
         yaw_rate = -self.yaw_gain * yaw_weight * yaw_error_after_deadzone
-        k_preview = self.route.top20_abs_curvature(self.station, self.preview_m)
-        v_cruise = self.max_v
-        if k_preview > 1e-4:
-            v_cruise = min(v_cruise, math.sqrt(self.lateral_accel / k_preview),
-                           self.max_w / k_preview)
-        v_cruise = max(min(self.max_v, CRUISE_MIN_MPS), v_cruise)
-        if pitch_deg >= PITCH_STEEP_DEG:
-            slow_speed = SLOW_STEEP_MPS
-        elif pitch_deg >= PITCH_HILL_DEG:
-            slow_speed = SLOW_HILL_MPS
-        else:
-            slow_speed = SLOW_FLAT_MPS
-        v = v_cruise if motion_policy == "CLEAR" else slow_speed
-        if motion_policy == "STOP":
-            v = 0.0
-        v = min(v, self.max_v)
+        # Safety owns all trajectory-related speed planning.
+        # Steering and wheel feasibility remain in Core.
+        v = min(self.max_v, speed_limit_mps)
 
         # PD corrects route curvature, with time-based derivative.
         k_p = -self.kp * error
@@ -435,8 +423,7 @@ class FFPD:
                 "ff_waypoint_station": float(self.route.s[ff_waypoint_index]),
                 "ff_preview_waypoints": self.ff_preview_waypoints,
                 "ff_curvature_inv_m": k_ff,
-                "preview_curvature_top20": k_preview,
-                "v_cruise_mps": v_cruise,
+                "speed_limit_mps": speed_limit_mps,
                 "ff": v * self.ff_gain * k_ff, "p": v * k_p, "i": v * k_i,
                 "d": v * k_d, "yaw": yaw_rate,
                 "k_cmd": k_cmd, "k_ff": k_ff, "k_p": k_p, "k_d": k_d,
@@ -445,5 +432,5 @@ class FFPD:
                 "core_wheel_clipped": bool(abs(requested_w - w) > 1e-12),
                 "v_for_steering_mps": v_for_steering,
                 "steering_state": steering_state, "motion_policy": motion_policy,
-                "pitch_deg": float(pitch_deg), "slow_speed_mps": slow_speed,
+                "pitch_deg": float(pitch_deg),
                 "vl": vl, "vr": vr, "predicted_pose": predicted}

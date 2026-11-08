@@ -160,7 +160,11 @@ class FFNode:
             preview_m=float(rospy.get_param("~preview_m", core_settings.CURVATURE_PREVIEW_M)),
             cte_deadzone=float(rospy.get_param("~cte_deadzone_m", core_settings.CTE_DEADZONE_M)),
             d_deadzone=float(rospy.get_param("~d_deadzone_mps", core_settings.D_DEADZONE_MPS)),
-            d_limit=float(rospy.get_param("~d_clamp_rad_s", core_settings.D_CLAMP_RAD_S)),
+            # New parameter name reflects the true curvature unit [1/m].
+            # Preserve the old private parameter for existing launch scripts.
+            d_limit=float(rospy.get_param(
+                "~d_clamp_curvature_inv_m",
+                rospy.get_param("~d_clamp_rad_s", core_settings.D_CLAMP_CURVATURE_INV_M))),
             prediction_horizon_s=float(rospy.get_param("~prediction_horizon_s", core_settings.PREDICTION_HORIZON_S)),
             prediction_measured_s=float(rospy.get_param("~prediction_measured_s", core_settings.PREDICTION_MEASURED_S)),
             prediction_step_s=float(rospy.get_param("~prediction_step_s", core_settings.PREDICTION_STEP_S)),
@@ -491,10 +495,40 @@ class FFNode:
                     return
                 # Only normal RUNNING commands are limited. disable() sends
                 # zero immediately for NO_TRACKING and all other safety faults.
+                limiter_diagnostics = {}
                 command_v, command_w = core_settings.limit_running_command(
                     self.last_command_v, self.last_command_w,
                     result["v"], result["w"], dt,
-                    self.core.wheel_track, self.core.min_wheel, self.core.max_wheel)
+                    self.core.wheel_track, self.core.min_wheel, self.core.max_wheel,
+                    diagnostics=limiter_diagnostics)
+                result.update(limiter_diagnostics)
+                # Capture both control stages and effective tunings in /ff_pid/status.
+                # pid_ready_bag.sh already records this topic at controller rate.
+                result["control_time_s"] = now
+                result["control_dt_s"] = dt
+                result["pose_used"] = pose
+                result["measured_v_mps"] = self.wheel[0]
+                result["measured_w_rad_s"] = self.wheel[1]
+                result["measured_wheel_left_mps"] = self.wheel_pair[0]
+                result["measured_wheel_right_mps"] = self.wheel_pair[1]
+                result["gicp_observation_id"] = self.pose_seq
+                result["gicp_observation_stamp_s"] = self.gicp_stamp
+                result["controller_params"] = {
+                    "kp": self.core.kp, "kd": self.core.kd, "ki": self.core.ki,
+                    "ff_gain": self.core.ff_gain,
+                    "ff_preview_waypoints": self.core.ff_preview_waypoints,
+                    "yaw_gain": self.core.yaw_gain,
+                    "yaw_deadzone_deg": self.core.yaw_deadzone_deg,
+                    "yaw_curvature_scale_m": self.core.yaw_curvature_scale_m,
+                    "cte_deadzone_m": self.core.cte_deadzone,
+                    "d_deadzone_mps": self.core.d_deadzone,
+                    "d_clamp_curvature_inv_m": self.core.d_limit,
+                    "max_v_mps": self.core.max_v, "max_w_rad_s": self.core.max_w,
+                    "linear_accel_mps2": core_settings.LINEAR_ACCEL_LIMIT_MPS2,
+                    "angular_accel_rad_s2": core_settings.ANGULAR_ACCEL_LIMIT_RAD_S2,
+                    "min_wheel_mps": self.core.min_wheel,
+                    "max_wheel_mps": self.core.max_wheel,
+                }
                 command = Twist()
                 command.linear.x = command_v
                 command.angular.z = command_w

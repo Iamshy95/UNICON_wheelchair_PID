@@ -390,7 +390,13 @@ def main():
         if args.command == "position":
             return show_position(args)
         return watch_states(args)
-    except (ImportError, ValueError, KeyError, OSError, RuntimeError) as exc:
+    except Exception as exc:
+        # Pose preflight must fail closed with a typed JSON result even if
+        # rospy/ROS package setup raises an exception outside the usual set.
+        # Preserve the older exception behavior for all other subcommands.
+        if args.command != "pose-on-route" and not isinstance(
+                exc, (ImportError, ValueError, KeyError, OSError, RuntimeError)):
+            raise
         print("[FAIL] Preflight: %s" % exc, file=sys.stderr, flush=True)
         if args.command == "pose-on-route":
             return _emit_pose_result(args, _pose_failure_result(

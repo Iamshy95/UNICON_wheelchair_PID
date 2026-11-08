@@ -10,12 +10,14 @@ import math
 import os
 import sys
 import threading
+from collections import deque
 
 import numpy as np
 import rospy
 import rospkg
 import tf.transformations as tft
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -203,11 +205,15 @@ class Safety:
                 or binding.get("drivable_mask_sha256") != sha256(mask_image_path(mask_path))):
             raise rospy.ROSInitException("Route/mask integrity mismatch")
         self.mask = RouteMask(mask_path)
-        self.transform = pose_correction(
-            "builtin", str(meta["body_frame_profile"])) @ reference_correction(
+        self.pose_transform = pose_correction(
+            str(rospy.get_param("~body_frame_profile", "builtin")),
+            str(meta["body_frame_profile"])) @ reference_correction(
                 str(meta["reference_point"]), route_chair_centre(meta))
         self.lock = threading.RLock()
-        self.pose, self.pose_at = None, None
+        # Same GICP + odometry propagation as ff_pid_node.py.
+        self.gicp_raw, self.gicp_odom_ref, self.gicp_received = None, None, None
+        self.odom_history = deque(maxlen=100)
+        self.odom_latest, self.odom_received = None, None
         self.predicted_cte, self.predicted_pose, self.predicted_at = None, None, None
         self.objects, self.objects_at = None, None
         self.station = None
@@ -216,7 +222,8 @@ class Safety:
         self.policy_pub = rospy.Publisher("/ff_pid/motion_policy", String, queue_size=2)
         self.status_pub = rospy.Publisher("/pid_safety/status", String, queue_size=3)
         rospy.Subscriber("/fast_lio_icp/pose", PoseWithCovarianceStamped,
-                         self.on_pose, queue_size=3)
+                         self.on_pose, queue_size=5)
+        rospy.Subscriber("/Odometry", Odometry, self.on_odom, queue_size=50)
         rospy.Subscriber("/ff_pid/status", String, self.on_controller, queue_size=3)
         rospy.Subscriber("/perception/objects_summary", String,
                          self.on_obstacles, queue_size=3)
@@ -224,25 +231,59 @@ class Safety:
         if self.test_clear:
             rospy.logwarn("TEST_CLEAR bypasses real obstacle protection: NEVER use for occupied driving.")
 
+    def on_odom(self, msg):
+        try:
+            q = msg.pose.pose.orientation
+            p = msg.pose.pose.position
+            transform = tft.quaternion_matrix([q.x, q.y, q.z, q.w])
+            transform[:3, 3] = (p.x, p.y, p.z)
+            stamp = msg.header.stamp.to_sec()
+            if stamp <= 0 or not math.isfinite(stamp):
+                return
+            if not np.isfinite(transform).all():
+                return
+            now = rospy.Time.now().to_sec()
+            with self.lock:
+                self.odom_history.append((stamp, transform))
+                self.odom_latest = transform
+                self.odom_received = now
+        except Exception as exc:
+            rospy.logwarn_throttle(5, "bad safety odom: %s", exc)
+
     def on_pose(self, msg):
         try:
-            now = rospy.Time.now().to_sec()
-            stamp = msg.header.stamp.to_sec()
-            if msg.header.frame_id not in ("map", "/map") or stamp <= 0 \
-                    or abs(now - stamp) > POSE_MAX_AGE_S:
+            if msg.header.frame_id not in ("map", "/map"):
                 return
             p, q = msg.pose.pose.position, msg.pose.pose.orientation
-            matrix = tft.quaternion_matrix([q.x, q.y, q.z, q.w])
-            matrix[:3, 3] = p.x, p.y, p.z
-            matrix = matrix @ self.transform
-            yaw = tft.euler_from_matrix(matrix)[2]
-            pose = (float(matrix[0, 3]), float(matrix[1, 3]), float(yaw))
-            if not all(math.isfinite(z) for z in pose):
+            raw_map = tft.quaternion_matrix([q.x, q.y, q.z, q.w])
+            raw_map[:3, 3] = (p.x, p.y, p.z)
+            now = rospy.Time.now().to_sec()
+            stamp = msg.header.stamp.to_sec()
+            if stamp <= 0 or abs(now - stamp) > POSE_MAX_AGE_S:
+                return
+            if not np.isfinite(raw_map).all():
                 return
             with self.lock:
-                self.pose, self.pose_at = pose, now
-        except (TypeError, ValueError, OverflowError):
-            return
+                nearest = min(self.odom_history, key=lambda e: abs(e[0] - stamp)) if self.odom_history else None
+                odom_ref = nearest[1].copy() if nearest is not None and abs(nearest[0] - stamp) <= 0.10 else None
+                self.gicp_raw = raw_map
+                self.gicp_odom_ref = odom_ref
+                self.gicp_received = now
+        except Exception as exc:
+            rospy.logwarn_throttle(5, "bad safety pose: %s", exc)
+
+    def current_pose(self, now):
+        if self.gicp_raw is None or self.gicp_received is None:
+            return None
+        if now - self.gicp_received > POSE_MAX_AGE_S:
+            return None
+        raw_map = self.gicp_raw
+        if (self.gicp_odom_ref is not None and self.odom_latest is not None and
+                self.odom_received is not None and now - self.odom_received <= 0.25):
+            raw_map = raw_map @ np.linalg.inv(self.gicp_odom_ref) @ self.odom_latest
+        matrix = raw_map @ self.pose_transform
+        _, _, yaw = tft.euler_from_matrix(matrix)
+        return float(matrix[0, 3]), float(matrix[1, 3]), float(yaw)
 
     def on_controller(self, msg):
         try:
@@ -355,8 +396,7 @@ class Safety:
     def tick(self, _event):
         now = rospy.Time.now().to_sec()
         with self.lock:
-            pose = self.pose if self.pose_at is not None and \
-                now - self.pose_at <= POSE_MAX_AGE_S else None
+            pose = self.current_pose(now)
             fresh_pred = self.predicted_at is not None and \
                 now - self.predicted_at <= PREDICTED_MAX_AGE_S
             pred_pose = self.predicted_pose if fresh_pred else None

@@ -357,6 +357,13 @@ class FFNode:
                 self.wheel_pair = (left, right)
                 self.wheel_received = rospy.Time.now().to_sec()
                 self.mode = mode
+                # Any MANUAL intervention revokes obstacle auto-resume.
+                # A later AUTO mode message alone cannot restart movement.
+                if mode != AUTO_MODE:
+                    self.resume_after_obstacle = False
+                    self.obstacle_stopped = False
+                    if self.enabled:
+                        self.disable("MANUAL_INTERVENTION")
                 if self.finishing:
                     if (abs(left) <= self.stopped_wheel_threshold and
                             abs(right) <= self.stopped_wheel_threshold):

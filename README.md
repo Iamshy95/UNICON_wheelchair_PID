@@ -1,341 +1,344 @@
-# UNICON Wheelchair — FF–PD 자율주행 시스템
+# UNICON Wheelchair — FF–PD + Safety 터미널 운용 매뉴얼
 
-ROS1 Noetic 기반 전동휠체어의 **정합 → 주행 → 정지**, 제어 파라미터 변경, 위치 기록과 ROS bag 녹화에 대한 사용 설명서입니다.
+ROS1 Noetic 기반 전동휠체어의 **READY(센서·정합 준비) → DRIVE(자율주행) → DRIVE STOP(주행 종료) → READY STOP(전체 종료)** 운용 가이드입니다.
+이 README는 **NUC 터미널 조작 기준**입니다. Android 앱·Bluetooth 연동 안내는 앱 저장소에서 별도로 관리합니다.
 
-> **저장소 구분:** 이 개인 저장소는 팀 저장소 [UNICON_wheelchair_v2](https://github.com/Dannythechampion/UNICON_wheelchair_v2)의 **PID 패키지 사본**입니다. 개인 저장소에서는 코드가 `scripts/`에, 경로 파일이 `waypoints/`에 있습니다. 아래 실행 명령어는 센서·위치추정·구동부 등이 갖춰진 **NUC의 전체 팀 프로젝트**(`UNICON_wheelchair_v2`)를 기준으로 작성했습니다. 개인 저장소만 단독으로 내려받아서는 READY/DRIVE가 실행되지 않습니다.
->
-> **동기화 기준:** NUC에 분리 배포한 팀 저장소 `feature/ffpid`, 커밋 `aadc8d1` (2026-11-06). 이후 README 수정은 기존 NUC 배포를 자동 변경하지 않습니다.
+> **중요 — NUC 배포 확인:** 이 저장소는 전체 팀 프로젝트의 `pid` 패키지를 별도로 관리하는 개인 저장소입니다. 지도·측위·인지·구동부 등이 포함된 **NUC 전체 배포**가 필요하며, 이 GitHub `main`을 갱신해도 NUC 파일은 자동으로 바뀌지 않습니다. 아래 명령은 최신 PID 코드를 실제 NUC 배포본에 동기화한 후 실행하세요.
 
-## 2026-11-07 FF–PD 실험 모드 (개인 저장소 최신 코드)
+## 0. 가장 먼저 보는 명령어 (Quick Start)
 
-다음 내용은 **개인 저장소의 변경 사항**입니다. NUC의 기존 배포본 및 팀 저장소에 자동 반영되지 않습니다. NUC에 복사/동기화한 FF–PD 배포본에서만 적용됩니다.
+**배포 예정 위치:** `~/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/`
 
-- `pid_ready.sh`: 공유 `base_model wheel.launch`를 **한 번만 실행**하며, 해당 실행 인자로 `wheel_separation_m:=0.46 turn_boost:=false cmd_callers:=/ff_pid`를 명시합니다. 팀원 DWA의 0.54m 설정이나 `base_model` 원본 파일은 변경하지 않습니다. 0.46m는 제어기와 구동 명령 변환에 사용하는 유효 간격이며, 차체 실제 폭 0.60m와 다른 개념입니다.
-- `pid_drive.sh A_to_D5 --test-clear`: 테스트 모드에서 `pid_safety.py`가 **10Hz CLEAR만 발행**합니다. 장애물·예측 마스크 경계 Safety 판단을 실행하지 않습니다. 단 FF–PD Node 자체의 현재 위치 마스크 포함, GICP, 바퀴 상태, 모드 확인과 정지 경로는 유지합니다.
-- `pid_drive.sh A_to_D5`: 일반 모드에서는 기존 Safety 판단을 사용합니다. ROS private 파라미터 `~test_clear`는 시작할 때마다 **false로 명시적으로 초기화**하므로 이전 테스트 설정이 남지 않습니다.
-- `pid_stop.sh`: FF–PD와 Safety 노드를 종료하며 READY의 센서·정합·구동부는 유지합니다.
+기존 NUC 배포 디렉터리 **그대로 최신 PID 파일을 덮어 배포하는 것을 전제**로, 아래 모든 명령은 경로 설정 없이 **각 줄을 복사해 바로 실행할 수 있도록** 작성했습니다. 별도의 `P`, `D`, `cd` 명령은 필요하지 않습니다.
 
-**테스트 실행 예 (NUC 배포 완료 후):**
+> **아직 최신 코드 배포 전:** 디렉터리 이름에 남아 있는 `aadc8d1`은 과거 배포 식별자입니다. GitHub의 최신 `main`을 위 디렉터리에 실제 반영하기 전에는 기존 코드가 실행됩니다.
+
+**기본 운용 순서**
 
 ```bash
-D="$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106"
-bash "$D/source-linux/src/pid/scripts/pid_ready.sh"
-bash "$D/source-linux/src/pid/scripts/pid_drive.sh" A_to_D5 --test-clear
-# 종료는 별도 터미널에서:
-bash "$D/source-linux/src/pid/scripts/pid_stop.sh"
+# ① READY: 센서·GICP 정합·인지·구동부 준비
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" start
+
+# ② DRIVE: 선택 경로 주행 (READY 이후)
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" A_to_D5
+
+# ③ DRIVE STOP: 별도 터미널에서 실행 (READY는 계속 유지)
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_stop.sh"
+
+# ④ READY STOP: 주행 종료 후 전체 센서·정합·녹화 종료
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" stop
 ```
 
-위 `D`는 과거 배포 경로의 예시입니다. **실제 코드가 갱신된 배포 디렉터리**를 지정해야 합니다. NUC에 아직 배포하지 않은 상태에서는 위 명령만으로 변경 사항이 실행되지 않습니다. 오늘의 테스트 모드는 장애물 자동 STOP을 의도적으로 비활성화하므로 보행자·장애물이 없는 통제 구간과 즉시 조작 가능한 물리적 정지 수단이 필요합니다. 별도 실차 주행 검증은 완료되지 않았습니다.
-
----
-
-## 1. 명령어 빠른 참조
-
-아래 명령어는 **NUC에 별도로 배포한 `ffpid-aadc8d1-20261106`** 기준입니다. GitHub에 푸시해도 NUC의 `current` 배포본은 자동으로 바뀌지 않습니다.
-
-- **기존 배포:** `~/wheelchair_deploys/current` → `main` (`d1c2629`), 유지
-- **신규 FF–PD 배포:** `~/wheelchair_deploys/ffpid-aadc8d1-20261106` → `feature/ffpid` (`aadc8d1`)
-- **신규 작업공간:** `~/wheelchair_deploys/ffpid-aadc8d1-20261106/ws`; `pid_ready.sh`와 `pid_drive.sh`가 실행 파일의 위치를 기준으로 자동 선택
-- **공유 환경:** 구동부 `~/catkin_ws`, Livox `~/ws_livox`, FAST-LIO `~/fast_lio_ws`
-
-**`current`를 전환하거나 기존 디렉터리로 이동할 필요가 없습니다.** 아래 명령은 어느 작업 디렉터리에서든 실행할 수 있도록 신규 배포본의 절대경로를 사용합니다. 현재와 다른 이름으로 재배포했다면 경로 안의 `ffpid-aadc8d1-20261106` 부분을 실제 배포명으로 바꾸세요.
-
-### 신규 배포본 확인 (조회만)
+**상태 모니터링 — 필요한 터미널에서 각각 실행**
 
 ```bash
-D="$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106"
-git -C "$D/source-linux" rev-parse --short HEAD  # aadc8d1
-rospack find pid  # 신규 워크스페이스 setup.bash를 source한 터미널에서 확인
-```
+# ⑤ READY: 최초 상태와 장애·복구·모드 변화만 출력
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" watch
 
-### NUC 접속 후 터미널 환경 설정
-
-ROS 명령어(`rostopic`, `rosnode`)를 **직접 확인할 때만** 아래를 실행합니다. `source setup.bash`처럼 파일명만 입력하면 현재 디렉터리에 파일이 없어서 실패합니다.
-
-```bash
+# ⑥ Safety: CLEAR / SLOW / STOP 또는 reason이 바뀔 때만 출력
 source /opt/ros/noetic/setup.bash
-source "$HOME/ws_livox/devel/setup.bash"
-source "$HOME/fast_lio_ws/devel/setup.bash"
-source "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/ws/devel/setup.bash"
+python3 -u "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_safety_watch.py"
 ```
 
-`pid_ready.sh start/status/watch` 명령 자체는 필요한 ROS 환경을 내부에서 설정합니다. 별도 `source` 없이 바로 실행해도 됩니다.
+- `READY watch`는 상태 확인용입니다. READY를 **새로 실행하지 않습니다**.
+- Safety 모니터는 `pid_drive.sh`가 Safety 노드를 시작한 뒤 상태를 수신합니다. 주행하지 않을 때는 `NO_STATUS`가 정상일 수 있습니다.
+- 각 모니터의 `Ctrl+C`는 **화면 표시만 종료**합니다. 자율주행을 종료하는 명령은 `pid_stop.sh`입니다.
+- `pid_drive.sh`는 시작에 성공한 뒤 **주행 상태를 계속 감시하므로 종료되지 않습니다**. DRIVE STOP은 다른 터미널에서 실행하세요.
+- `pid_ready.sh start`는 준비 후 반환하며 READY 노드들은 계속 실행됩니다.
 
-### READY 전체 종료 (주행 정지와 별개)
-
-주행 종료는 `pid_stop.sh`, READY가 준비한 LiDAR·FAST-LIO·GICP·구동부·ROS bag 전체 종료는 `pid_ready.sh stop`으로 수행합니다.
-
-```bash
-D="$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106"
-bash "$D/source-linux/src/pid/scripts/pid_stop.sh"
-bash "$D/source-linux/src/pid/scripts/pid_ready.sh" stop
-```
-
-기존 `$HOME/pid_ready_shutdown.sh` 별도 다운로드 방식은 현재 소스 버전과 달라 사용하지 않습니다. READY 실패 시에도 해당 실행이 생성한 프로세스의 종료를 시도하며, 완료된 실행 기록은 활성 상태에서 해제합니다. 프로세스 종료가 물리적 정차를 보증하지는 않습니다.
-
-### 센서 데이터 확인
-
-```bash
-source /opt/ros/noetic/setup.bash
-source "$HOME/ws_livox/devel/setup.bash"
-source "$HOME/fast_lio_ws/devel/setup.bash"
-
-rostopic hz /livox/lidar  # 정상 약 10 Hz; Ctrl+C로 종료
-rostopic hz /livox/imu    # 정상 약 200 Hz
-rostopic hz /Odometry     # FAST-LIO 정상 약 10 Hz
-```
-
-`Cannot load message class for [livox_ros_driver2/CustomMsg]`는 LiDAR 장애의 직접 증거가 아니며, ROS 드라이버 메시지 워크스페이스를 `source`하지 않았을 때 발생할 수 있습니다.
-
-### ① 정합 및 주행 준비 — ROS bag 자동 녹화 포함
-
-```bash
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh"
-```
-
-READY는 LiDAR, FAST-LIO, GICP, 장애물 인식, 구동부 및 Watchdog을 실행하고 상태를 점검합니다. **자율주행을 시작하지는 않습니다.** 정상 준비 뒤에도 READY의 모니터는 상태 변화를 감시합니다. 이미 수동으로 실행한 LiDAR·FAST-LIO 등은 중복 실행을 피하도록 먼저 정상 종료하세요. READY가 시작한 노드는 백그라운드에 남으므로, READY 터미널에서 `Ctrl+C`만 눌러도 센서·구동 노드가 종료되는 것은 아닙니다.
-
-현재 상태만 보려면 (`start` 아님):
+**상태를 한 번만 확인할 때**
 
 ```bash
 bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" status
+source /opt/ros/noetic/setup.bash
+rostopic echo -n1 /pid_safety/status
 ```
 
-상태 변화 모니터링:
+위 Safety 1회 조회는 선택 사항입니다. **지속적인 이벤트 모니터링은 `pid_safety_watch.py`**를 사용합니다.
 
-```bash
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" watch
+### 운용 전 확인
+
+- 최초 READY 정합은 A 지점 기준으로 구성되어 있습니다. 실제 지도와 휠체어의 위치·방향이 올바른지는 현장에서 별도로 확인해야 합니다.
+- 출발 전에는 **MANUAL 및 정차 상태**여야 합니다. 선택 경로와의 거리 **1.0m 이하**, 경로 진행 방향과의 오차 **30° 이하**를 확인합니다. 시작점이 아니라 **선택 경로 전체 중 가장 가까운 지점**을 기준으로 하므로 경로 중간에서도 재출발할 수 있습니다.
+- 출발 거부 시 회전 안내를 먼저, 경로 접근 안내를 다음에 출력합니다. 실제 이동은 운용자가 MANUAL로 수행하고, 위치 조정 후 DRIVE를 다시 실행합니다. 수치 1.0m·30°는 실차 안전성이 검증된 허용값이 아닙니다.
+- 물리적 조이스틱·긴급 정지 수단을 확보해야 합니다. `pid_stop.sh`는 안전 인증된 비상정지 장치가 아닙니다.
+- **`--test-clear`는 실제 Safety 판단을 우회합니다. 탑승 주행에서 사용하지 마세요.**
+
+---
+
+## 1. 시스템과 실행 흐름
+
+```text
+[READY] pid_ready.sh start
+    ├─ ROS Master
+    ├─ Livox MID-360 LiDAR / IMU
+    ├─ FAST-LIO → GICP 지도 정합 (TRACKING)
+    ├─ 기하학 기반 장애물 인식·객체 융합
+    ├─ 동적 객체 GICP 제외 처리
+    ├─ Wheel / UART / 정지 Watchdog
+    └─ ROS bag 녹화 (가능한 경우)
+            │
+            ▼
+[DRIVE] pid_drive.sh <route>
+    ├─ READY 상태·MANUAL 정차·중복 /cmd_vel 확인
+    ├─ 경로 거리 ≤ 1.0m / 방향 오차 ≤ 30° 검사
+    ├─ ff_pid_node.py + pid_safety.py 시작
+    ├─ Safety 최신 CLEAR/SLOW 정책 확인
+    ├─ MANUAL → AUTO → /ff_pid/start 서비스
+    └─ 주행 상태 감시 (스크립트 유지)
+            │
+            ▼
+[DRIVE STOP] pid_stop.sh
+    ├─ FF–PD 정지 요청 / MANUAL 전환
+    ├─ wheel_status의 정차·MANUAL 응답 확인
+    └─ FF–PD·Safety 노드 종료
+            │
+            └── READY 센서·GICP·ROS bag 유지
+            │
+            ▼
+[READY STOP] pid_ready.sh stop
+    ├─ 필요한 경우 주행 정지 요청
+    ├─ ROS bag 정상 종료 시도
+    └─ READY가 시작한 ROS 프로세스 정리
 ```
 
-**GICP 주의:** 실내에서 야외 Route2 지도를 사용했는데도 내부 정합 조건을 통과하여 `TRACKING`이 나온 사례가 있습니다. `READY` 성공은 실제 지도 위치의 정확성을 보증하지 않습니다. 야외에서 실제 기준점과 추정 위치·방향을 비교하기 전에는 주행 허가 근거로 사용하지 마세요. 장애물 자동 정지 역시 FF–PD 경로에 아직 연결되지 않았습니다.
+### READY의 역할
 
-### ② 경로 지정 후 주행 시작
+`pid_ready.sh start`는 전체 ROS 환경을 준비하고 GICP의 초기 정합을 검사합니다.
+초기 정합에 사용되는 Route2 기준 경로는 A에서 시작하는 `A_to_D5`이며, **이후 DRIVE에서 어떤 경로를 선택할지는 별개**입니다.
+READY 성공은 자율주행 명령을 의미하지 않고, 지도상 절대위치가 실제와 정확히 일치한다는 보장도 아닙니다.
 
-경로 선택 메뉴를 열려면:
+`pid_ready.sh status`는 한 번의 상태 조회, `pid_ready.sh watch`는 **약 2초마다 내부 상태를 확인하되 실제 장애·회복·모드 변화가 있을 때만 출력**합니다.
+LiDAR, IMU, GICP, Perception, UART, Watchdog, rosbag 등과 장애물 인식·소멸을 확인할 수 있습니다. 장애물 인식 이벤트와 Safety의 감속·정지 판단은 서로 다른 정보입니다.
+
+### DRIVE의 역할
+
+`pid_drive.sh`는 한 경로를 선택해 사전 조건을 확인한 후 FF–PD와 Safety를 기동합니다.
+Safety 노드와 FF–PD의 제어 정책이 정상적으로 준비된 뒤에만 AUTO 전환 및 START 서비스 요청을 진행합니다.
+성공 시 DRIVE 스크립트는 종료되지 않고 주행 상태 전환과 약 **30초마다 진행률**을 표시합니다.
+
+### DRIVE STOP과 READY STOP의 차이
+
+`pid_stop.sh`는 FF–PD와 Safety만 정리하고 **READY 센서, GICP, ROS bag을 유지**합니다. 이 상태에서 다른 경로로 다시 DRIVE를 시작할 수 있습니다.
+`pid_ready.sh stop`은 그 READY 세션의 프로세스와 녹화를 종료하므로 **실험 전체를 마칠 때** 사용합니다.
+MANUAL 명령이 전달되었다는 사실과 실제 물리적 정차 확인은 다릅니다. 정차 검증 실패 경고가 발생하면 물리 상태를 확인해야 합니다.
+
+## 2. 경로 선택 및 출발 조건
+
+### 지원 경로: A / D4 / D5 간 6개
+
+```text
+A_to_D4    A_to_D5
+D4_to_A    D4_to_D5
+D5_to_A    D5_to_D4
+```
 
 ```bash
+# 경로 이름 직접 지정
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" D4_to_D5
+
+# 인자 없이 실행하면 터미널에서 경로 번호 1~6 선택
 bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh"
 ```
 
-경로를 바로 지정하려면:
+터미널 인자 없이 경로를 선택하려면 대화형 터미널이 필요합니다.
 
-```bash
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" A_to_D5
-```
+### 출발 실패 시 위치 조정 안내
 
-사용 가능한 경로는 다음 6개입니다.
+`pid_drive_check.py`의 `pose-on-route` 검사에는 다음이 적용됩니다.
+
+| 항목 | 조건 | 기준 |
+|---|---|---|
+| GICP Pose | `map` 프레임, 최근 데이터 | 유효 데이터 필요 |
+| 비교 위치 | 센서 기준점을 휠체어 중심으로 보정 | 경로의 `chair_centre`와 일치 |
+| 경로 거리 | **1.0m 이하** | 선택 경로 전체에서 가장 가까운 지점 |
+| 방향 오차 | **30° 이하** | 가장 가까운 경로 접선의 진행 방향 |
+| 구동 모드 | MANUAL + 정차 확인 | 출발 전 필수 |
+
+출발 조건을 만족하지 못하면 제어 노드를 실행하지 않고 MANUAL 상태를 유지합니다.
+예를 들어 방향이 왼쪽으로 45° 어긋나고 경로에서 1.4m 떨어져 있다면 다음 순서로 안내합니다.
 
 ```text
-A_to_D4
-A_to_D5
-D4_to_A
-D4_to_D5
-D5_to_A
-D5_to_D4
+[GUIDE 1/2] 먼저 MANUAL로 왼쪽 약 45.0도 회전해 경로 진행 방향을 맞추세요.
+[GUIDE 2/2] 다음으로 MANUAL로 경로 쪽에 접근하세요.
+             경로까지 1.40m, 허용 범위까지 최소 0.40m 더 가까워져야 합니다.
 ```
 
-### ③ 파라미터 변경 후 주행 시작
+**45°와 0.40m는 예시값**이며 매번 최신 위치로 재계산합니다. 경로 좌우 정보는 **경로 진행 방향 기준**이고, 회전 방향은 **현재 휠체어 방향 기준**입니다. 0.40m는 경로까지 줄여야 할 최소 직선거리이지 휠체어의 실제 이동거리를 의미하지 않습니다.
 
-VS Code에서 **NUC에서 실행하는 신규 배포본의 실제 파일** `~/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/ff_pid_core.py`를 열어 `KP`, `KD`, `MAX_V_MPS` 등 원하는 값을 수정하고 저장합니다.
+출발 검사 결과는 향후 Bluetooth 브릿지에서도 읽을 수 있도록 `drive_preflight` JSON으로 출력하며, START 서비스 승인 후에는 `drive_event: STARTED`를 출력합니다. 성공 이벤트는 서비스 승인 의미이지 실제 이동이 측정되었다는 뜻이 아닙니다.
 
-이미 주행 중이면 먼저 정지한 뒤 다시 시작합니다.
-
-```bash
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_stop.sh"
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" A_to_D5
-```
-
-**Python 파라미터 수정에는 재빌드가 필요하지 않습니다.** 값은 FF–PD 노드를 새로 실행할 때 적용됩니다. 단, 해당 항목의 `/ff_pid/*` ROS private 파라미터가 설정돼 있으면 그 값이 파일의 기본값보다 우선합니다.
-
-> 현재 `pid_drive.sh`에 제어 파라미터를 명령행 인자로 직접 전달하는 기능은 없습니다. 이 README는 VS Code에서 파일을 수정하는 사용 방식을 기준으로 합니다.
-
-### ④ 자율주행 정지
-
-```bash
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_stop.sh"
-```
-
-FF–PD 정지와 MANUAL 복귀를 요청합니다. **READY, 위치추정 및 ROS bag 녹화는 계속 유지**되므로 주행을 다시 시작할 때 READY를 반복할 필요는 없습니다.
-
-### ⑤ 현재 위치 확인
+직접 위치만 조회할 때는 다음 명령을 사용합니다(주행하지 않음).
 
 ```bash
 bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" position
 ```
 
-현재 GICP Map 기준 X, Y, Yaw를 한 번 출력합니다. 주행 명령을 보내지 않습니다.
+## 3. 이벤트 기반 모니터링
 
-### ⑥ 특정 위치 기록 (ROS bag 마커)
+### READY 이벤트
 
 ```bash
-# 출발·도착 지점
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark START_A
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark START_D4
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark START_D5
-
-# 과속방지턱
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_ENTRY
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_EXIT
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" watch
 ```
 
-각 명령은 `/manual_mark` 토픽에 마커를 전송합니다. 해당 시각의 위치·바퀴 정보는 녹화된 bag과 대응해 분석할 수 있습니다.
+정상 상태에서는 반복 메시지가 없고, 장치 이상·복구, GICP TRACKING 변화, MANUAL/AUTO 전환, ROS bag 중단·재개, 객체 인식·소멸 등에 대해 이벤트를 출력합니다. `Ctrl+C`로 종료해도 READY는 계속 실행됩니다.
 
-### ⑦ 실험 완료 후 ROS bag 녹화 종료
+### Safety 이벤트 — 주행 중 권장
 
 ```bash
+source /opt/ros/noetic/setup.bash
+python3 -u "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_safety_watch.py"
+```
+
+`pid_safety.py`가 발행하는 `/pid_safety/status`를 구독하지만, 10Hz 메시지를 전부 출력하지 않고 **최초 상태 및 `(state, reason, route)` 변화 시에만** 출력합니다. 수신이 약 1.5초 동안 끊기면 `NO_STATUS`를 한 번 표시하고, 복구 후 다시 최초 상태를 표시합니다.
+
+출력 예시(실측이 아닌 형식 예시):
+
+```text
+12:00:00 [SAFETY] CLEAR | reason=NO_RESTRICTION | limit=0.80 m/s | route=A_to_D5
+12:00:08 [SAFETY] SLOW  | reason=CURVATURE_LIMIT | limit=0.60 m/s | route=A_to_D5
+12:00:13 [SAFETY] STOP  | reason=PATH_OBSTACLE  | limit=0.00 m/s | route=A_to_D5
+12:00:18 [SAFETY] CLEAR | reason=NO_RESTRICTION | limit=0.80 m/s | route=A_to_D5
+```
+
+Safety 모니터는 **읽기 전용**입니다. 감속 및 정지 제어는 `pid_safety.py`와 `ff_pid_node.py`가 수행합니다.
+Safety `STOP`은 장애물·인지 오류 등으로 인한 **일시적인 주행 정지**입니다. 이를 DRIVE 종료 명령으로 취급하지 않습니다. 원인이 해소되면 기존 정책에 따라 주행이 재개될 수 있습니다.
+
+Safety 판단의 주요 이유:
+
+| Safety | 대표 이유 | 의미 |
+|---|---|---|
+| CLEAR | `NO_RESTRICTION` | 추가 속도 제한 없음 |
+| SLOW | `PATH_OBSTACLE` | 전방 경로 장애물 접근 |
+| SLOW | `CURVATURE_LIMIT` | 전방 경로 곡률로 감속 |
+| SLOW | `CTE_LIMIT` | 경로 횡방향 오차로 감속 |
+| STOP | `PATH_OBSTACLE` | 경로 전방 정지 거리 내 장애물 |
+| STOP | `VERY_CLOSE_OBJECT` | 휠체어와 너무 가까운 물체 |
+| STOP | `MASK_BOUNDARY` | 주행 가능 영역 경계 검사 실패 |
+| STOP | `PERCEPTION_STALE`, `POSE_MISSING` 등 | 인지·위치 데이터 이상 |
+| STOP | `RELEASE_CONFIRM` | STOP 해제 전 짧은 안정 확인 |
+
+출력은 **이벤트마다 발생**하지만, Safety의 속도 상한 숫자만 같은 이유 안에서 변하는 경우에는 별도 이벤트로 출력하지 않습니다. 상세한 연속 수치를 확인해야 할 때만 `rostopic echo /pid_safety/status`를 사용합니다(이 명령은 메시지마다 계속 출력함).
+
+### FF–PD 주행 상태 (선택)
+
+별도 모니터 없이도 `pid_drive.sh` 터미널에 FF–PD 상태 변경과 약 30초 간격 진행률이 출력됩니다.
+추가로 전체 상태가 필요하면 다음을 사용할 수 있습니다.
+
+```bash
+source /opt/ros/noetic/setup.bash
+rostopic echo /ff_pid/status
+```
+
+위 명령은 상태 메시지를 모두 출력하는 디버깅용입니다. 평소에는 READY 이벤트와 Safety 이벤트를 우선 확인하면 됩니다.
+
+## 4. FF–PD + Safety 구성
+
+### FF–PD 제어기
+
+`ff_pid_core.py`는 경로를 재샘플링하지 않고 저장된 Waypoint·곡률을 사용합니다.
+
+- 곡률 기반 **Feedforward**: 전방 경로 곡률의 조향 성분
+- 예측 **CTE 기반 PD**: 횡방향 위치 오차와 변화율 보정
+- 예측 **Heading Error**: 주행 방향 정렬을 위한 Yaw 보정
+- 좌우 바퀴 속도 제약 및 정상 RUNNING 명령의 가속·각속도 변화 제한
+- `ff_pid_node.py`에서 50Hz로 제어, 조건 미충족 시 HOLD/정지 처리
+
+주요 시작 파라미터(실차 최종 튜닝값이 아님):
+
+| 변수 | 값 | 역할 |
+|---|---:|---|
+| `KP` | 1.00 | CTE P 게인 |
+| `KD` | 0.50 | CTE D 게인 |
+| `KI` | 0.00 | I항 미사용 |
+| `FF_GAIN` | 1.00 | FF 배율 |
+| `YAW_GAIN` | 0.50 | Heading 보정 |
+| `MAX_V_MPS` | 0.80 m/s | 목표 최고 전진 속도 |
+| `MAX_W_RAD_S` | 0.60 rad/s | 목표 최고 각속도 |
+| `WHEEL_TRACK_M` | 0.46 m | 구동 변환용 유효 바퀴 간격 |
+| `PREDICTION_HORIZON_S` | 0.50 s | 예측 시간 |
+
+### Safety 제어기
+
+`pid_safety.py`는 FF–PD와 별도 노드로 실행되며, `/cmd_vel`을 직접 발행하지 않습니다. 현재·예측 위치, Drivable Mask, 객체 정보, 경로 진행도/CTE/곡률 및 데이터 최신성을 바탕으로 다음을 산출합니다.
+
+- `CLEAR`: 기본 속도 상한 허용
+- `SLOW`: 곡률·CTE·장애물에 따라 속도 상한 감소
+- `STOP`: 장애물 근접·영역 경계·입력 오류 등으로 속도 0 요청
+
+`/ff_pid/motion_policy`의 `state`·`speed_limit_mps`를 FF–PD 노드가 반영하고, 진단용 `/pid_safety/status`에는 같은 정책과 `reason`을 포함합니다. Safety 정책이 최신·유효하지 않으면 제어기가 진행을 허용하지 않습니다.
+
+주요 기준은 `scripts/pid_safety.py` 상단에 있습니다(전방 장애물 `STOP 1.0m`, `SLOW 2.0m`, 정책 주기 0.1초, 인지 타임아웃 1.0초 등). 이는 제어 정책의 초기 설정이며 물리적 안전 인증이나 실차 검증 결과를 의미하지 않습니다.
+
+### 주요 ROS 인터페이스
+
+| 토픽·서비스 | 역할 |
+|---|---|
+| `/fast_lio_icp/pose` | 지도 기준 위치·방향 |
+| `/fast_lio_icp/localization_diagnostics` | GICP 상태 |
+| `/wheel_status` | 구동 모드·바퀴 피드백 |
+| `/ff_pid/start` | FF–PD START / PAUSE 요청 서비스 |
+| `/ff_pid/status` | 제어기 상태·경로 진행도 |
+| `/ff_pid/motion_policy` | Safety가 발행하는 주행 정책 |
+| `/pid_safety/status` | Safety 상태·이유·속도 상한 |
+| `/perception/objects_summary` | 인식/융합 객체 정보 |
+| `/cmd_vel` | FF–PD의 구동 속도 명령 |
+| `/mode_cmd` | AUTO(65) / MANUAL(77) 요청 |
+
+## 5. 기록·실험 보조 명령
+
+READY는 가능하면 ROS bag 녹화를 자동으로 시작합니다. 녹화 실패가 READY 자체를 항상 막지는 않으므로 확인이 필요합니다. 파일은 READY 실행 디렉터리(`~/pid_ready_logs/<실행시각>/`)에 보관하며 **512MB 또는 15분** 단위로 분할합니다.
+
+```bash
+# 녹화 상태와 저장 파일 확인
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" status
+
+# 수동 마커 기록 — 실험 중 원하는 시점
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark START_A
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_ENTRY
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_EXIT
+
+# READY는 유지하고 녹화만 종료하려면
 bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" stop
 ```
 
-자율주행 정지와 별개입니다. 녹화가 계속 필요한 동안에는 이 명령어를 실행하지 않습니다.
+녹화에는 `/fast_lio_icp/pose`, `/Odometry`, `/wheel_status`, `/cmd_vel`, `/ff_pid/status`, **`/ff_pid/motion_policy`, `/pid_safety/status`**, `/perception/objects_summary`, `/manual_mark` 등이 포함됩니다.
 
----
+파라미터를 변경할 때는 **NUC에서 실제 실행하는 배포본**의 `ff_pid_core.py` 또는 `pid_safety.py`를 수정합니다. 실행 중인 Python 프로세스에는 즉시 적용되지 않으므로 DRIVE STOP 후 다시 DRIVE를 시작합니다. Python 소스 값보다 ROS private 파라미터가 우선하도록 구현된 항목도 있습니다. C++/메시지 정의가 아니라 Python 코드만 수정했다면 일반적으로 `catkin_make`가 필요하지 않습니다.
 
-## 2. 전체 시스템 구조
+## 6. 주요 파일과 배포 위치
 
-```text
-[READY] pid_ready.sh
-   ├─ ROS Master
-   ├─ Livox MID-360 / IMU
-   ├─ FAST-LIO → Odometry
-   ├─ GICP → Map Localization / TRACKING
-   ├─ Geometric Perception + Object Fusion
-   ├─ Dynamic Object Exclusion
-   ├─ Wheel / UART / Stop Watchdog
-   └─ ROS bag 자동 녹화
-           │
-           ▼
-[DRIVE] pid_drive.sh
-   ├─ 경로 선택 및 사전 검사
-   ├─ MANUAL → AUTO
-   ├─ ff_pid_node.py
-   └─ ff_pid_core.py
-       ├─ 곡률 기반 Feedforward
-       ├─ 예측 CTE 기반 PD Feedback
-       ├─ 전방 곡률 기반 감속
-       ├─ 좌·우 바퀴 속도 제약 검사
-       └─ /cmd_vel 출력
-           │
-           ▼
-[STOP] pid_stop.sh
-   ├─ FF–PD 정지 요청
-   ├─ 바퀴 정지 피드백 확인
-   ├─ MANUAL 복귀
-   └─ /ff_pid 노드 종료
-
-   ※ READY 센서·정합과 ROS bag 녹화는 유지
-```
-
-### READY의 역할
-
-`pid_ready.sh`는 전체 ROS 센서·정합·인지·구동 환경을 준비하며 최초 성공 여부와 Map 위치를 보여줍니다. 초기 정합 기준은 `A_to_D5` 경로의 A 지점이며, 이후 선택하는 주행 경로와는 별개입니다. READY는 주행 명령을 발행하지 않습니다.
-
-### DRIVE의 역할
-
-`pid_drive.sh`는 선택한 경로를 확인하고 주행 전 검사를 수행합니다. 주요 검사 대상은 GICP TRACKING, Map 위치와 센서 데이터의 최신성, 모터 MANUAL 및 정차 상태, 선택 경로와 위치·방향의 적합성, `/cmd_vel` 중복 발행 여부 등입니다.
-
-출발점과 좌표가 반드시 같을 필요는 없습니다. **선택 경로의 중간에서 정지했다가 재출발할 수 있습니다.** 경로와 너무 멀거나 방향이 맞지 않으면 시작하지 않습니다.
-
-### STOP의 역할
-
-`pid_stop.sh`는 FF–PD에 정지를 요청한 뒤 모터 피드백으로 정차와 MANUAL 전환을 확인하고 주행 노드를 종료합니다. 정상적인 ROS 통신과 구동부 응답을 전제로 하므로 **물리적 긴급정지를 대신하지 않습니다.**
-
-## 3. FF–PD 제어 방식
-
-- **Feedforward:** 전방 경로 곡률을 사용해 선제적으로 각속도를 계산합니다.
-- **PD Feedback:** 예측 CTE와 시간당 오차 변화율로 목표 곡률을 보정하고 목표 선속도를 곱해 각속도 명령으로 변환합니다. Core는 Node의 50Hz 타이머에서 호출됩니다.
-- **커브 감속:** 현재 위치 전방 구간에서 절대 곡률 상위 20%의 평균을 구하고, 횡가속도·각속도 제한을 적용해 목표 속도를 낮춥니다.
-- **바퀴 속도 제한:** 제어 각속도를 허용 범위 내로 포화시킵니다. 데이터 끊김은 Node에서 정지 요청합니다. **경로 이탈·장애물 판단을 담당할 새로운 `pid_safety.py`는 아직 구현하지 않았습니다.**
-
-현재 곡률 감속과 Pitch 보정은 Core에 유지합니다. 새 `pid_safety.py`는 설계 전이며, 이전에 임의로 만든 `pid_motion_safety.py` 및 DRIVE 자동 실행은 제거됐습니다.
-
-### 현재 기본 제어 파라미터
-
-파일: NUC 신규 배포본의 `source-linux/src/pid/scripts/ff_pid_core.py` (개인 저장소에서는 `scripts/ff_pid_core.py`)
-
-| 변수 | 기본값 | 의미 |
-|---|---:|---|
-| `KP` | 1.00 | P 게인 |
-| `KD` | 0.50 | D 게인 |
-| `KI` | 0.00 | I 게인 |
-| `MAX_V_MPS` | 0.80 | 최대 전진 속도 (m/s) |
-| `MAX_W_RAD_S` | 0.60 | 최대 각속도 (rad/s) |
-| `WHEEL_TRACK_M` | 0.46 | 유효 바퀴 간격 (m) |
-| `MIN_WHEEL_MPS` | 0.30 | 최소 바퀴 속도 (m/s) |
-| `MAX_WHEEL_MPS` | 1.00 | 최대 바퀴 속도 (m/s) |
-| `LATERAL_ACCEL_MPS2` | 0.15 | 곡률 감속 횡가속도 제한 (m/s²) |
-| `CURVATURE_PREVIEW_M` | 2.0 | 전방 곡률 확인 거리 (m) |
-| `CTE_DEADZONE_M` | 0.20 | CTE 데드존 (m) |
-| `D_DEADZONE_MPS` | 0.02 | D항 입력 데드존 (m/s) |
-| `D_CLAMP_RAD_S` | 0.15 | 기존 이름: D항 곡률 보정값 제한 |
-
-수정된 Python 소스는 **현재 실행 중인 제어기에 즉시 반영되지 않습니다.** 정지 후 DRIVE를 다시 실행해야 하며, 별도의 `catkin_make`는 일반적으로 필요하지 않습니다. C++ 코드나 ROS 메시지 정의 등 빌드 대상이 변경되면 빌드가 필요할 수 있습니다.
-
-## 4. 터미널 상태 출력
-
-정상 상태를 계속 출력하기보다는 **최초 점검 및 상태 변화 중심**으로 출력합니다.
-
-| 시점·상황 | 출력 |
+| 파일 (PID 패키지 `scripts/`) | 기능 |
 |---|---|
-| READY 처음 완료 | 장치·센서·정합 점검 결과와 Map 위치 |
-| 정상 작동 유지 | 반복 출력 없음 |
-| LiDAR / IMU / UART / GICP 이상·복구 | 변화 발생 시 |
-| MANUAL ↔ AUTO 전환 | 변화 발생 시 |
-| 장애물 인식·소멸 | 인식 상태 변경 시 |
-| ROS bag 녹화 중단·재개 | 변화 발생 시 |
-| 주행 RUNNING / 정지 / 오류 / 종료 | 상태 변경 시 |
-| 주행 진행률 | 주행 중 약 30초마다 |
-| 현재 위치 | 사용자가 `position` 명령을 실행할 때 |
-| 목표·실제 선속도, 각속도, CTE | 정상 주행 중 상시 출력하지 않음 |
+| `pid_ready.sh` | READY 시작·상태·이벤트·전체 종료 |
+| `pid_ready_monitor.py` | READY 상태 판정과 이벤트 출력 |
+| `pid_ready_shutdown.sh` | READY 프로세스·녹화 정리 |
+| `pid_ready_bag.sh` | ROS bag 시작·상태·마커·종료 |
+| `pid_drive.sh` | 경로 선택, 사전 검사, FF–PD·Safety 시작 |
+| `pid_drive_check.py` | MANUAL 정차 확인, 1.0m/30° 경로 정렬, JSON 및 주행 상태 감시 |
+| `pid_safety_watch.py` | Safety 상태·사유 변경만 표시하는 읽기 전용 터미널 감시 |
+| `ff_pid_core.py` | FF–PD 제어 계산·파라미터 |
+| `ff_pid_node.py` | FF–PD ROS 노드, `/cmd_vel` 및 `/ff_pid/start` |
+| `pid_safety.py` | CLEAR/SLOW/STOP 정책, 이유·속도 상한 |
+| `pid_stop.sh` | 자율주행 종료, MANUAL 복귀 확인, READY 유지 |
 
-장애물 **인식**과 장애물에 대한 **감속·정지 판단**은 다른 기능입니다. 현재 출력되는 장애물 메시지는 인식 이벤트만 나타냅니다.
+**개인 저장소**에는 `scripts/`, `waypoints/`가 있습니다. **NUC 팀 전체 배포**에서는 보통 `source-linux/src/pid/scripts/`에서 PID 스크립트를 사용하며, 지도·경로의 실제 자산은 전체 배포 구조에 의존합니다.
 
-## 5. ROS bag 데이터 기록
+2026-11-06에 사용한 NUC 배포 예시는 `~/wheelchair_deploys/ffpid-aadc8d1-20261106`였습니다. 이 이름과 당시 커밋 `aadc8d1`은 **과거 배포 식별자**이지, 현재 GitHub `main`의 최신 FF–PD·Safety 코드가 NUC에 설치돼 있다는 뜻이 아닙니다. READY/DRIVE 스크립트와 도우미·경로 자산이 **같은 최신 배포본**을 바라보는지 확인해야 합니다.
 
-READY에서 별도 명령 없이 ROS bag 녹화를 시작합니다. 기본 저장 경로는 다음과 같습니다.
+## 7. 문제 발생 시
 
-```text
-~/pid_ready_logs/<실행시각>/
-```
-
-bag 파일은 **512MB 또는 15분**마다 분할됩니다.
-
-기록 토픽:
-
-```text
-/fast_lio_icp/pose
-/fast_lio_icp/localization_diagnostics
-/Odometry
-/livox/imu
-/wheel_status
-/wheel_cmd
-/mode_cmd
-/cmd_vel
-/ff_pid/status
-/perception/objects_summary
-/uart_tx_diag
-/stop_watchdog/alarm
-/manual_mark
-```
-
-READY와 녹화는 자율주행을 STOP한 이후에도 유지되므로 수동주행·정지 후 재출발 상황도 기록할 수 있습니다. 녹화를 모두 마쳤을 때만 `pid_ready_bag.sh stop`을 실행합니다.
-
-## 6. 코드 파일별 역할
-
-| 파일 (개인 저장소의 `scripts/`) | 역할 |
+| 상황 | 확인 사항 |
 |---|---|
-| `pid_ready.sh` | 전체 ROS 환경과 GICP 정합 준비, bag 시작 |
-| `pid_ready_monitor.py` | READY 상태 점검과 상태 변화 출력 |
-| `pid_ready_bag.sh` | ROS bag 녹화·마커 기록·종료 |
-| `pid_drive.sh` | 경로 선택, 사전 검사, AUTO 전환 및 주행 시작 |
-| `pid_drive_check.py` | 주행 전 상태 검사, 위치 조회, 주행 상태·진행률 출력 |
-| `ff_pid_node.py` | FF–PD ROS 인터페이스, `/ff_pid/start`, `/cmd_vel` |
-| `ff_pid_core.py` | FF–PD 알고리즘과 제어 파라미터 |
-| `pid_stop.sh` | 자율주행 정지 및 MANUAL 복귀 |
+| READY 미준비 | `pid_ready.sh status`, `watch`, READY 실행 로그 |
+| GICP TRACKING 실패 | 실제 위치·지도·정합 초기화 및 진단 |
+| 출발 시 위치 조정 요청 | MANUAL에서 방향·경로 거리 조정 후 DRIVE 재실행 |
+| `/cmd_vel` 중복 발행 | 다른 제어 노드 중지 후 단일 발행자 확인 |
+| START 거절 | 터미널의 `drive_preflight`, `drive_event`, Safety 상태 및 FF–PD 로그 |
+| Safety STOP | `pid_safety_watch.py`의 `reason` 확인. STOP은 주행 종료가 아님 |
+| STOP 후 물리 정차 미확인 | 즉시 실제 구동 상태·물리 정지 수단 확인 |
+| Safety 상태 `NO_STATUS` | 주행 전이면 미실행일 수 있음. 주행 중이면 Safety 노드·ROS 통신 점검 |
+| NUC가 최신 기능을 모름 | 사용 중인 배포 디렉터리가 최신 GitHub PID 코드와 동기화됐는지 확인 |
 
-## 7. 안전 제한 및 검증 상태
-
-현재 FF–PD는 위치추정, 경로·마스크 및 구동 상태 등을 검사하지만 **장애물 인식 결과에 따른 자동 감속·정지 판단은 아직 FF–PD와 연결되지 않았습니다.** 기존 SafetyGate/TipGuard 역시 이 FF–PD 구성에서 활성화되지 않습니다.
-
-실제 주행 시험은 통제된 구역에서 실시하고, 작업자가 물리적 정지 수단을 확보해야 합니다. 소프트웨어 정지 스크립트는 안전 인증된 비상정지 기능이 아닙니다.
-
-**검증 범위 (2026-11-06):** NUC의 신규 배포본 `aadc8d1`에서 `static_livox_localization`과 `pid` 빌드 성공, LiDAR 약 10 Hz·IMU 약 200 Hz, FAST-LIO `/Odometry` 약 10 Hz, READY의 센서·GICP·인지·UART·Watchdog·녹화 통합 검사 통과. 기존 테스트 3개 및 NUC 실제 `wheel_cmd_tmp.py`와 GitHub 스냅샷 불일치로 생긴 추가 1개 실패는 확인 후 오프라인 배포 범위로 수동 승인했습니다. **GICP 절대위치 정확성, FF–PD 실제 주행, 장애물 자동 정지는 검증되지 않았습니다.**
+**검증 범위:** READY 장치 초기화 및 일부 통합 검사는 이전 NUC 배포에서 수행했지만, 이후 변경된 FF–PD + Safety + 출발 위치 검사 전체에 대한 **실차 통합 검증은 완료되지 않았습니다**. 소프트웨어 감시·정지 기능은 실제 휠체어의 물리적 정지 수단을 대체하지 않습니다.

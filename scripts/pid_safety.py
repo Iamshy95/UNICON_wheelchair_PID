@@ -363,13 +363,17 @@ class Safety:
             samples = object_samples(item, box)
             if samples is None:
                 return "STOP", 0., "BAD_OBJECT_PROFILE", info
-            # Outside-mask fixed structures should not produce global near STOP.
-            outside_static = (item.get("band_relation") == "outside"
-                              and item.get("motion") == "static")
+            # The geometric perception 'outside' label refers to the
+            # common Drivable Mask (with classification tolerance).
+            # Ignore it for both near-footprint and route obstacle decisions,
+            # regardless of static/moving/unknown motion classification.
+            # 'crossing', 'inside' and 'unavailable' remain checked.
+            if item.get("band_relation") == "outside":
+                continue
             gap = footprint_gap(box)
-            if not outside_static and (near_gap is None or gap < near_gap):
+            if near_gap is None or gap < near_gap:
                 near_gap = gap
-            if not outside_static and gap < NEAR_STOP_GAP_M:
+            if gap < NEAR_STOP_GAP_M:
                 info.update(near_gap_m=gap, obstacle_id=item.get("id"))
                 return "STOP", 0., "VERY_CLOSE_OBJECT", info
             distance = path_gap(self.route, station, pose, samples, corridor)

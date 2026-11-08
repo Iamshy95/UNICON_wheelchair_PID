@@ -34,7 +34,8 @@ from route_mask import RouteMask
 # Keep all adjustable safety settings here. Unverified physical parameters
 # must be measured before any occupied-wheelchair deployment.
 MAX_SPEED_MPS = CONTROL_MAX_V_MPS
-CTE_DEADZONE_M = CONTROL_CTE_DEADZONE_M     # Shared 0.10 m reference
+CTE_DEADZONE_M = CONTROL_CTE_DEADZONE_M     # Corridor expansion begins above 0.10 m
+CTE_SPEED_START_M = 0.30                    # Speed cap starts falling beyond 0.30 m
 CORRIDOR_HALF_WIDTH_M = 0.50               # From route centre, each side
 CHAIR_HALF_WIDTH_M = 0.30                  # Approx. physical half width
 CHAIR_FRONT_M = 0.52                       # Axle-centred front estimate
@@ -43,13 +44,12 @@ MASK_CLEARANCE_M = 0.30                    # Predicted/current centre to mask
 NEAR_STOP_GAP_M = 0.50                     # Box-to-chair footprint gap
 FRONT_STOP_M = 1.00                        # Obstacle path distance from front
 FRONT_SLOW_M = 2.00
-OBSTACLE_SLOW_MIN_MPS = 0.60               # Limit approached just above FRONT_STOP_M; at/below it STOP
-CTE_SLOW_PER_M_MPS = 0.50                  # 0.01 m/s each 0.02 m CTE
-CTE_SPEED_FLOOR_MPS = 0.60
+OBSTACLE_SLOW_MIN_MPS = 0.40               # Limit approached just above FRONT_STOP_M; at/below it STOP
+CTE_SLOW_PER_M_MPS = 1.00                  # For each 1 cm beyond 0.30 m, reduce 0.01 m/s
+CTE_SPEED_FLOOR_MPS = 0.40
 CURVATURE_PREVIEW_M = 2.00                 # Ahead from current route station
-LATERAL_ACCEL_LIMIT_MPS2 = 0.15
 CURVATURE_SPEED_FLOOR_MPS = 0.60
-MAX_ANGULAR_RATE_RAD_S = 0.60
+CURVATURE_FULL_SLOW_AT_INV_M = 0.40        # |kappa|=0.0 -> 0.8, >=0.4 -> 0.6 m/s
 POSE_MAX_AGE_S = 0.50
 PREDICTED_MAX_AGE_S = 0.30
 OBSTACLE_TIMEOUT_S = 1.00
@@ -150,16 +150,15 @@ def path_gap(route, station, chair_pose, samples, corridor_half):
 
 def speed_caps(route, station, cte):
     """CTE and top-20%-curvature speed ceilings; neither modifies steering."""
-    excess = max(0.0, abs(cte) - CTE_DEADZONE_M)
+    excess = max(0.0, abs(cte) - CTE_SPEED_START_M)
     cte_cap = clamp(MAX_SPEED_MPS - CTE_SLOW_PER_M_MPS * excess,
                     CTE_SPEED_FLOOR_MPS, MAX_SPEED_MPS)
     curvature = route.top20_abs_curvature(station, CURVATURE_PREVIEW_M)
-    curve_cap = MAX_SPEED_MPS
-    if curvature > 1e-4:
-        curve_cap = min(MAX_SPEED_MPS,
-                        math.sqrt(LATERAL_ACCEL_LIMIT_MPS2 / curvature),
-                        MAX_ANGULAR_RATE_RAD_S / curvature)
-    curve_cap = clamp(curve_cap, CURVATURE_SPEED_FLOOR_MPS, MAX_SPEED_MPS)
+    # Linear: 0.0 1/m -> 0.8 m/s; 0.4 1/m -> 0.6 m/s (then clamped).
+    curve_cap = clamp(
+        MAX_SPEED_MPS - (MAX_SPEED_MPS - CURVATURE_SPEED_FLOOR_MPS)
+        * curvature / CURVATURE_FULL_SLOW_AT_INV_M,
+        CURVATURE_SPEED_FLOOR_MPS, MAX_SPEED_MPS)
     return cte_cap, curve_cap, curvature
 
 
@@ -183,6 +182,10 @@ class Safety:
         if abs(CTE_DEADZONE_M - CONTROL_CTE_DEADZONE_M) > 1e-9:
             raise rospy.ROSInitException("Safety/Core CTE deadzones differ")
         if not (0 < OBSTACLE_SLOW_MIN_MPS <= MAX_SPEED_MPS
+                and 0 < CTE_SPEED_FLOOR_MPS <= MAX_SPEED_MPS
+                and 0 < CURVATURE_SPEED_FLOOR_MPS <= MAX_SPEED_MPS
+                and CTE_SPEED_START_M >= CTE_DEADZONE_M
+                and CTE_SLOW_PER_M_MPS > 0 and CURVATURE_FULL_SLOW_AT_INV_M > 0
                 and FRONT_STOP_M < FRONT_SLOW_M
                 and 0 < CORRIDOR_HALF_WIDTH_M and 0 < POLICY_PERIOD_S):
             raise rospy.ROSInitException("Invalid safety parameters")

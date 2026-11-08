@@ -123,20 +123,36 @@ def check_pose_on_route(args):
         # Project onto the WHOLE route, not its first waypoint. The operator
         # may pause and resume at any point along this same route.
         station, cte, dist, tangent = route.project(x, y)
-        heading_error_rad = abs(wrap(yaw - tangent))
+        signed_heading_error_rad = wrap(tangent - yaw)
+        heading_error_rad = abs(signed_heading_error_rad)
         print("[INFO] Current chair centre (map): x=%.3f, y=%.3f, yaw=%.1f deg" %
               (x, y, math.degrees(yaw)))
         print("[INFO] Nearest route progress: s=%.2f / %.2f m" %
               (station, route.length))
         print("[INFO] Path offset: %.3f m (CTE %+0.3f m), heading error %.1f deg" %
               (dist, cte, math.degrees(heading_error_rad)))
-        # These match the FF node's default path/heading HOLD thresholds.
-        # They are NOT constraints on distance from the START waypoint.
+        # Pre-start operator alignment only: any station along the route is
+        # valid. This is not an autonomous manoeuvre or a collision clearance.
         if dist > args.max_distance or heading_error_rad > args.max_heading_rad:
-            print("[FAIL] Current pose is not safely aligned to route "
+            print("[FAIL] Current pose is not aligned to selected route "
                   "(limit: %.2f m / %.1f deg). Keep MANUAL." %
                   (args.max_distance, math.degrees(args.max_heading_rad)),
                   file=sys.stderr)
+            if heading_error_rad > args.max_heading_rad:
+                turn_side = "왼쪽" if signed_heading_error_rad > 0 else "오른쪽"
+                print("[GUIDE 1/2] 먼저 MANUAL로 %s 약 %.1f도 회전해 경로 진행 방향을 맞추세요." %
+                      (turn_side, math.degrees(heading_error_rad)))
+            else:
+                print("[GUIDE 1/2] 경로 진행 방향 조건 충족 (오차 %.1f도)." %
+                      math.degrees(heading_error_rad))
+            if dist > args.max_distance:
+                route_side = "오른쪽" if cte > 0 else "왼쪽"
+                print("[GUIDE 2/2] 다음으로 경로 기준 %s에 있는 경로에 MANUAL로 접근하세요. "
+                      "경로까지 %.2fm, 허용 범위까지 최소 %.2fm 더 가까워져야 합니다." %
+                      (route_side, dist, dist - args.max_distance))
+                print("[INFO] 휠체어는 옆으로 직접 이동할 수 없으므로 주변 공간을 확인하며 조향하세요.")
+            else:
+                print("[GUIDE 2/2] 경로 거리 조건 충족 (%.2fm)." % dist)
             return 1
         print("[OK] Current position is compatible with route (mid-route resume allowed)")
         return 0
@@ -279,8 +295,8 @@ def main():
     wheels.add_argument("--timeout", type=float, default=6.0)
     start = sub.add_parser("pose-on-route", help="Check current chair pose against ANY station on route")
     start.add_argument("--route", required=True)
-    start.add_argument("--max-distance", type=float, default=0.70)
-    start.add_argument("--max-heading-rad", type=float, default=1.50)
+    start.add_argument("--max-distance", type=float, default=1.00)
+    start.add_argument("--max-heading-rad", type=float, default=math.pi / 6)
     start.add_argument("--timeout", type=float, default=5.0)
     watch = sub.add_parser("watch", help="Quiet drive status and periodic progress")
     watch.add_argument("--route", required=True)

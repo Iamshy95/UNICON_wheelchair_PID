@@ -7,40 +7,37 @@ ROS1 Noetic 기반 전동휠체어의 **READY(센서·정합 준비) → DRIVE(�
 
 ## 0. 가장 먼저 보는 명령어 (Quick Start)
 
-NUC의 **실제 배포 경로**로 `P`를 한 번 지정합니다. 이후 명령은 어느 디렉터리에서든 실행할 수 있습니다.
+**배포 예정 위치:** `~/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/`
 
-```bash
-# 예시: 2026-11-06 당시 사용한 배포 경로입니다.
-# 다른 경로에 최신 버전을 배포했다면 P를 실제 경로로 변경하세요.
-P="$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts"
-test -f "$P/pid_drive.sh" && echo "PID script path OK"
-```
+기존 NUC 배포 디렉터리 **그대로 최신 PID 파일을 덮어 배포하는 것을 전제**로, 아래 모든 명령은 경로 설정 없이 **각 줄을 복사해 바로 실행할 수 있도록** 작성했습니다. 별도의 `P`, `D`, `cd` 명령은 필요하지 않습니다.
+
+> **아직 최신 코드 배포 전:** 디렉터리 이름에 남아 있는 `aadc8d1`은 과거 배포 식별자입니다. GitHub의 최신 `main`을 위 디렉터리에 실제 반영하기 전에는 기존 코드가 실행됩니다.
 
 **기본 운용 순서**
 
 ```bash
 # ① READY: 센서·GICP 정합·인지·구동부 준비
-bash "$P/pid_ready.sh" start
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" start
 
 # ② DRIVE: 선택 경로 주행 (READY 이후)
-bash "$P/pid_drive.sh" A_to_D5
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" A_to_D5
 
 # ③ DRIVE STOP: 별도 터미널에서 실행 (READY는 계속 유지)
-bash "$P/pid_stop.sh"
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_stop.sh"
 
 # ④ READY STOP: 주행 종료 후 전체 센서·정합·녹화 종료
-bash "$P/pid_ready.sh" stop
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" stop
 ```
 
 **상태 모니터링 — 필요한 터미널에서 각각 실행**
 
 ```bash
 # ⑤ READY: 최초 상태와 장애·복구·모드 변화만 출력
-bash "$P/pid_ready.sh" watch
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" watch
 
 # ⑥ Safety: CLEAR / SLOW / STOP 또는 reason이 바뀔 때만 출력
 source /opt/ros/noetic/setup.bash
-python3 -u "$P/pid_safety_watch.py"
+python3 -u "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_safety_watch.py"
 ```
 
 - `READY watch`는 상태 확인용입니다. READY를 **새로 실행하지 않습니다**.
@@ -52,7 +49,7 @@ python3 -u "$P/pid_safety_watch.py"
 **상태를 한 번만 확인할 때**
 
 ```bash
-bash "$P/pid_ready.sh" status
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" status
 source /opt/ros/noetic/setup.bash
 rostopic echo -n1 /pid_safety/status
 ```
@@ -138,10 +135,10 @@ D5_to_A    D5_to_D4
 
 ```bash
 # 경로 이름 직접 지정
-bash "$P/pid_drive.sh" D4_to_D5
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" D4_to_D5
 
 # 인자 없이 실행하면 터미널에서 경로 번호 1~6 선택
-bash "$P/pid_drive.sh"
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh"
 ```
 
 터미널 인자 없이 경로를 선택하려면 대화형 터미널이 필요합니다.
@@ -174,7 +171,7 @@ bash "$P/pid_drive.sh"
 직접 위치만 조회할 때는 다음 명령을 사용합니다(주행하지 않음).
 
 ```bash
-bash "$P/pid_drive.sh" position
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" position
 ```
 
 ## 3. 이벤트 기반 모니터링
@@ -182,7 +179,7 @@ bash "$P/pid_drive.sh" position
 ### READY 이벤트
 
 ```bash
-bash "$P/pid_ready.sh" watch
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" watch
 ```
 
 정상 상태에서는 반복 메시지가 없고, 장치 이상·복구, GICP TRACKING 변화, MANUAL/AUTO 전환, ROS bag 중단·재개, 객체 인식·소멸 등에 대해 이벤트를 출력합니다. `Ctrl+C`로 종료해도 READY는 계속 실행됩니다.
@@ -191,7 +188,7 @@ bash "$P/pid_ready.sh" watch
 
 ```bash
 source /opt/ros/noetic/setup.bash
-python3 -u "$P/pid_safety_watch.py"
+python3 -u "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_safety_watch.py"
 ```
 
 `pid_safety.py`가 발행하는 `/pid_safety/status`를 구독하지만, 10Hz 메시지를 전부 출력하지 않고 **최초 상태 및 `(state, reason, route)` 변화 시에만** 출력합니다. 수신이 약 1.5초 동안 끊기면 `NO_STATUS`를 한 번 표시하고, 복구 후 다시 최초 상태를 표시합니다.
@@ -295,15 +292,15 @@ READY는 가능하면 ROS bag 녹화를 자동으로 시작합니다. 녹화 실
 
 ```bash
 # 녹화 상태와 저장 파일 확인
-bash "$P/pid_ready_bag.sh" status
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" status
 
 # 수동 마커 기록 — 실험 중 원하는 시점
-bash "$P/pid_ready_bag.sh" mark START_A
-bash "$P/pid_ready_bag.sh" mark BUMP_ENTRY
-bash "$P/pid_ready_bag.sh" mark BUMP_EXIT
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark START_A
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_ENTRY
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_EXIT
 
 # READY는 유지하고 녹화만 종료하려면
-bash "$P/pid_ready_bag.sh" stop
+bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" stop
 ```
 
 녹화에는 `/fast_lio_icp/pose`, `/Odometry`, `/wheel_status`, `/cmd_vel`, `/ff_pid/status`, **`/ff_pid/motion_policy`, `/pid_safety/status`**, `/perception/objects_summary`, `/manual_mark` 등이 포함됩니다.

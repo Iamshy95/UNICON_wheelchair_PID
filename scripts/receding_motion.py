@@ -78,22 +78,33 @@ class RecedingTracks:
             if object_id not in seen or (history and stamp - history[-1][0] > MAX_SAMPLE_GAP_S):
                 self.tracks.pop(object_id, None)
 
-    def receding(self, object_id, source_stamp):
+    def receding(self, object_id, source_stamp, now=None):
         if not isinstance(object_id, int) or isinstance(object_id, bool):
             return False
         history = self.tracks.get(object_id)
         if not history or len(history) < 4:
             return False
         if (not isinstance(source_stamp, (int, float)) or
+                not math.isfinite(source_stamp) or
                 source_stamp - history[-1][0] > MAX_OBSERVATION_AGE_S or
                 source_stamp < history[-1][0]):
             return False
+        if now is not None:
+            if (not isinstance(now, (int, float)) or not math.isfinite(now)
+                    or now < source_stamp or now - source_stamp > MAX_OBSERVATION_AGE_S):
+                return False
         start, end = history[0], history[-1]
         elapsed = end[0] - start[0]
         if elapsed < MIN_HISTORY_S:
             return False
         delta_range = math.hypot(end[1], end[2]) - math.hypot(start[1], start[2])
         delta_forward = end[1] - start[1]
+        # Net departure alone is insufficient: a reversing object could
+        # retain a large positive net displacement while now approaching.
+        recent = list(history)[-3:]
+        ranges = [math.hypot(h[1], h[2]) for h in recent]
+        if any(new < old - 1e-3 for old, new in zip(ranges[:-1], ranges[1:])):
+            return False
         return (delta_range >= MIN_RANGE_INCREASE_M and
                 delta_forward >= MIN_FORWARD_INCREASE_M and
                 delta_range / elapsed >= MIN_SEPARATION_RATE_MPS)

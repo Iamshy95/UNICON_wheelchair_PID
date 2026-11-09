@@ -208,6 +208,7 @@ class Safety:
             raise rospy.ROSInitException("Invalid route: " + self.route_name)
         self.test_clear = bool(rospy.get_param("~test_clear", False))
         self.enable_replan = bool(rospy.get_param("~enable_replan", False)) and not self.test_clear
+        self.enable_receding = bool(rospy.get_param("~enable_receding", False)) and not self.test_clear
         if abs(CTE_DEADZONE_M - CONTROL_CTE_DEADZONE_M) > 1e-9:
             raise rospy.ROSInitException("Safety/Core CTE deadzones differ")
         if not (0 < OBSTACLE_SLOW_MIN_MPS <= MAX_SPEED_MPS
@@ -648,7 +649,9 @@ class Safety:
                            and self.receding_tracks.receding(item.get("id"), stamp, now=now))
             item_cap, item_stop, item_reason = obstacle_restriction(
                 distance, item.get("motion"), moving_away,
-                MAX_SPEED_MPS, OBSTACLE_SLOW_MIN_MPS)
+                MAX_SPEED_MPS, OBSTACLE_SLOW_MIN_MPS,
+                static_detour_enabled=self.enable_replan,
+                receding_enabled=self.enable_receding)
             if item_reason == "RECEDING_IGNORED":
                 receding_ignored.append(item.get("id"))
             elif item_reason == "RECEDING_NEAR_SLOW":

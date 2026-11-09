@@ -121,6 +121,7 @@ class FFNode:
         self.route = Route(route_path)
         self.route_version = "original"
         self.pending_replan = None
+        self.replan_resume_pending = False
         metadata = self.route.metadata
         if metadata.get("reference_point") != REFERENCE_CHAIR_CENTRE:
             raise rospy.ROSInitException("only chair-centred routes are allowed")
@@ -367,6 +368,7 @@ class FFNode:
                 self.core.reset()
                 self.last_tick = None
                 self.route_version = plan_id
+                self.replan_resume_pending = True
                 self.pending_replan = None
                 self.stop()
                 self.send_replan_ack(plan_id, "APPLIED")
@@ -426,6 +428,9 @@ class FFNode:
             elif self.obstacle_stopped and self.resume_after_obstacle and not self.external_hold:
                 if self.readiness(now) is None:
                     self.core.reset()
+                    if self.replan_resume_pending:
+                        self.core.station = 0.0
+                        self.replan_resume_pending = False
                     self.enabled = True
                     self.obstacle_stopped = False
                     self.resume_after_obstacle = False
@@ -584,6 +589,9 @@ class FFNode:
                     self.motion_policy in ("CLEAR", "SLOW") and not self.external_hold):
                     if self.readiness(now) is None:
                         self.core.reset()
+                        if self.replan_resume_pending:
+                            self.core.station = 0.0
+                            self.replan_resume_pending = False
                         self.enabled = True
                         self.obstacle_stopped = False
                         self.resume_after_obstacle = False

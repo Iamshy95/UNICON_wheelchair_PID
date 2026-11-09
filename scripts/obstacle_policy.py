@@ -12,7 +12,7 @@ FRONT_SLOW_M = 2.0
 def obstacle_restriction(distance, motion, confirmed_receding, max_speed,
                          slow_min_speed):
     """Return (speed_ceiling, must_stop, reason) for one path-relative object."""
-    if distance is None or distance >= FRONT_SLOW_M:
+    if distance is None or distance > FRONT_SLOW_M:
         return max_speed, False, "NONE"
     if motion == "static":
         return 0.0, True, "STATIC_PATH_OBSTACLE"

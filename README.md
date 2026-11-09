@@ -387,7 +387,7 @@ bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.
 - **A* 활성화 시 정적 장애물**은 경로 앞쪽 **2.0m 이내**에서 `PATH_OBSTACLE`로 STOP합니다. 물리적 바퀴 정지와 `static` 판정을 확인하면 별도 고정 대기 없이 A* 요청을 시작합니다.
 - **동적 완화 활성화 시 이동 장애물**이 실제로 **휠체어로부터 지속적으로 멀어짐**을 최소 0.6초 이상 확인한 경우에만 1~2m 구간의 장애물 감속을 무시합니다. 1m 이하에서는 저속 제한(현재 0.4m/s)을 적용하며, 아주 가까운 물체(기존 `NEAR_STOP_GAP_M`)는 무조건 STOP합니다. 멀어짐을 확인하지 못한 `moving`, `unknown` 객체에는 기존 Safety 정지·감속을 그대로 적용합니다.
 - `moving`과 `unknown`은 A* 장애물 지도에서 제외하지만 **Safety의 지속적인 충돌 감시 대상**입니다. `/perception/objects_summary` 객체 ID/위치 이력을 사용한 상대거리 변화 판정은 보수적 초기 설정이며 실주행 노이즈 검증이 필요합니다.
-- 플래너는 원래 10cm 마스크에 정적 AABB 장애물을 팽창(현재 **임시 설정** 0.70 → 0.80 → 0.90m)해 8방향 A*를 실행하고, Line-of-Sight 꺾임 제거 → 5차 B-Spline 시도 → 10cm Waypoint 및 Yaw 재생성 → 기존 경로 후방 합류를 수행합니다.
+- 플래너는 원래 10cm 마스크에 정적 AABB 장애물을 팽창(현재 **임시 설정** 0.50 → 0.60 → 0.70m)해 8방향 A*를 실행하고, Line-of-Sight 꺾임 제거 → 5차 B-Spline 시도 → 10cm Waypoint 및 Yaw 재생성 → 기존 경로 후방 합류를 수행합니다.
 - Safety는 최종 경로 전체의 마스크 여유와 정적 장애물 충돌을 재검증합니다. 실패하거나 시간 초과라면 `STOP`을 유지합니다.
 - `/ff_pid/replan/request` → `/ff_pid/replan/candidate` → `/ff_pid/replan/stage` → `/ff_pid/replan/ack`(PREPARED) → `/ff_pid/replan/commit` → ACK(APPLIED) 순서입니다. ACK 전까지 `REPLAN_HOLD` 정책으로 정지합니다.
 - Safety와 FF–PD가 동일한 `route_version`을 사용해야만 CLEAR/SLOW 주행이 허용됩니다. 성공한 경로는 **메모리에서만 교체**합니다. 새 경로 좌표는 `/ff_pid/active_route`에 `type: route` 형태로 발행하지만, **개인 Android Bluetooth 브릿지의 자동 전달은 아직 구현하지 않았습니다.**
@@ -398,3 +398,5 @@ bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.
 
 
 제자리 회전은 이 변경에 포함하지 않았습니다. 현재 구동부의 좌우 역회전 허용 및 차체 회전 중 마스크·장애물 검증이 완료되지 않았으므로, `MASK_BOUNDARY` 정지와 우회경로 재출발에서는 기존 STOP/FF–PD 동작을 유지합니다.
+
+**제자리 회전 미적용:** 마스크 경계 근접 정지 상태에서 실제 제자리 회전하려면 `v=0, w≠0` 명령이 구동부에서 양쪽 바퀴 반대 방향 회전으로 그대로 전달되어야 합니다. 팀 저장소의 과거 NUC 스냅샷 `docs/nuc_snapshot/base_model_wheel_cmd_tmp.py`에는 회전력 확보를 위해 양쪽 바퀴에 전진속도를 가하는 보정이 있으므로, 이를 수정하거나 실기에서 검증하지 않은 상태에서는 제자리 회전을 활성화하지 않습니다. 마스크 중심점 여유만으로 실제 회전하는 차체 전체의 안전을 보장하지 않습니다.

@@ -25,6 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ff_pid_core import Route, CTE_DEADZONE_M as CONTROL_CTE_DEADZONE_M
 from ff_pid_core import MAX_V_MPS as CONTROL_MAX_V_MPS
 from replan_path import checked_path, static_boxes, OBSTACLE_RADIUS_M, MASK_RESERVE_M
+from receding_motion import RecedingTracks
+from obstacle_policy import obstacle_restriction
 
 localization_scripts = os.path.join(
     rospkg.RosPack().get_path("static_livox_localization"), "scripts")
@@ -38,7 +40,7 @@ from route_mask import RouteMask
 # Keep all adjustable safety settings here. Unverified physical parameters
 # must be measured before any occupied-wheelchair deployment.
 MAX_SPEED_MPS = CONTROL_MAX_V_MPS
-CTE_DEADZONE_M = CONTROL_CTE_DEADZONE_M     # Corridor expansion begins above 0.10 m
+CTE_DEADZONE_M = CONTROL_CTE_DEADZONE_M     # Corridor expansion follows Core deadzone
 CTE_SPEED_START_M = 0.30                    # Speed cap starts falling beyond 0.30 m
 CORRIDOR_HALF_WIDTH_M = 0.50               # From route centre, each side
 CHAIR_HALF_WIDTH_M = 0.30                  # Approx. physical half width
@@ -242,6 +244,7 @@ class Safety:
         self.odom_latest, self.odom_received = None, None
         self.predicted_cte, self.predicted_pose, self.predicted_at = None, None, None
         self.objects, self.objects_at = None, None
+        self.receding_tracks = RecedingTracks()
         self.station = None
         self.route_version = "original"
         self.controller_ever_running = False
@@ -360,6 +363,7 @@ class Safety:
             objects = None
         with self.lock:
             self.objects, self.objects_at = objects, rospy.Time.now().to_sec()
+            self.receding_tracks.update(objects)
 
     def on_wheel(self, msg):
         # Read feedback, never assume that commanded zero equals physical stop.
@@ -601,6 +605,11 @@ class Safety:
         info["curve_limit_mps"] = curve_cap
         info["preview_curvature_inv_m"] = curvature
         closest, closest_id, near_gap = None, None, None
+        obstacle_cap = MAX_SPEED_MPS
+        cap_reason = None
+        stopped_distance, stopped_id = None, None
+        receding_ignored = []
+        receding_near = []
         for item in objects["objects"]:
             if not isinstance(item, dict):
                 return "STOP", 0., "BAD_OBJECT", info
@@ -624,14 +633,30 @@ class Safety:
                 info.update(near_gap_m=gap, obstacle_id=item.get("id"))
                 return "STOP", 0., "VERY_CLOSE_OBJECT", info
             distance = path_gap(self.route, station, pose, samples, corridor)
-            if distance is not None and (closest is None or distance < closest):
+            if distance is None:
+                continue
+            if closest is None or distance < closest:
                 closest, closest_id = distance, item.get("id")
+            moving_away = (item.get("motion") == "moving"
+                           and self.receding_tracks.receding(item.get("id"), stamp))
+            item_cap, item_stop, item_reason = obstacle_restriction(
+                distance, item.get("motion"), moving_away,
+                MAX_SPEED_MPS, OBSTACLE_SLOW_MIN_MPS)
+            if item_reason == "RECEDING_IGNORED":
+                receding_ignored.append(item.get("id"))
+            elif item_reason == "RECEDING_NEAR_SLOW":
+                receding_near.append(item.get("id"))
+            if item_stop and (stopped_distance is None or distance < stopped_distance):
+                stopped_distance, stopped_id = distance, item.get("id")
+            if item_cap < obstacle_cap:
+                obstacle_cap, cap_reason = item_cap, item_reason
         info["near_gap_m"] = near_gap
         info["obstacle_distance_m"] = closest
-        info["obstacle_id"] = closest_id
-        obstacle_cap = obstacle_speed_cap(closest)
+        info["obstacle_id"] = stopped_id if stopped_id is not None else closest_id
         info["obstacle_limit_mps"] = obstacle_cap
-        if closest is not None and closest <= FRONT_STOP_M:
+        info["receding_ignored_ids"] = receding_ignored
+        info["receding_near_slow_ids"] = receding_near
+        if stopped_distance is not None:
             return "STOP", 0., "PATH_OBSTACLE", info
         cap = min(MAX_SPEED_MPS, cte_cap, curve_cap, obstacle_cap, goal_cap)
         if cap < MAX_SPEED_MPS - SLOW_THRESHOLD_MPS:

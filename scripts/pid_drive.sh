@@ -153,9 +153,14 @@ done
 }
 SAFETY_LOG="$RUN_DIR/pid_safety_${ROUTE}_$(date +%Y%m%d_%H%M%S).log"
 # Always overwrite the private ROS param: the previous test=true can survive node exit.
-SAFETY_PARAMS=("_route:=$ROUTE" "_test_clear:=false")
+REPLAN_ENABLED=false
+if [[ "${PID_ENABLE_ASTAR:-false}" == "true" && "$TEST_CLEAR" != "true" ]]; then
+  REPLAN_ENABLED=true
+  printf '[WARN] Experimental autonomous A* detour enabled. Unvalidated on real wheelchair.\n' >&2
+fi
+SAFETY_PARAMS=("_route:=$ROUTE" "_test_clear:=false" "_enable_replan:=$REPLAN_ENABLED")
 if [[ "$TEST_CLEAR" == true ]]; then
-  SAFETY_PARAMS=("_route:=$ROUTE" "_test_clear:=true")
+  SAFETY_PARAMS=("_route:=$ROUTE" "_test_clear:=true" "_enable_replan:=false")
   printf '[WARN] TEST CLEAR: 장애물/마스크 감시 없이 CLEAR만 발행합니다.\n' >&2
 fi
 setsid nohup env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \

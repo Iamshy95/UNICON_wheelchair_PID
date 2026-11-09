@@ -10,13 +10,14 @@ FRONT_SLOW_M = 2.0
 
 
 def obstacle_restriction(distance, motion, confirmed_receding, max_speed,
-                         slow_min_speed):
+                         slow_min_speed, static_detour_enabled=False,
+                         receding_enabled=False):
     """Return (speed_ceiling, must_stop, reason) for one path-relative object."""
     if distance is None or distance > FRONT_SLOW_M:
         return max_speed, False, "NONE"
-    if motion == "static":
+    if motion == "static" and static_detour_enabled:
         return 0.0, True, "STATIC_PATH_OBSTACLE"
-    if motion == "moving" and confirmed_receding:
+    if motion == "moving" and confirmed_receding and receding_enabled:
         if distance > FRONT_STOP_M:
             return max_speed, False, "RECEDING_IGNORED"
         return min(slow_min_speed, max_speed), False, "RECEDING_NEAR_SLOW"

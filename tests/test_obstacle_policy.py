@@ -16,7 +16,17 @@ def box(stamp, x, y=0.0, state="moving", obj_id=41):
 
 class ObstaclePolicyTests(unittest.TestCase):
     def policy(self, distance, motion, receding=False):
-        return obstacle_restriction(distance, motion, receding, 0.8, 0.4)
+        return obstacle_restriction(
+            distance, motion, receding, 0.8, 0.4,
+            static_detour_enabled=True, receding_enabled=True)
+
+    def test_both_experimental_flags_off_preserve_legacy(self):
+        original_static = obstacle_restriction(1.5, "static", False, .8, .4)
+        original_receding = obstacle_restriction(1.5, "moving", True, .8, .4)
+        self.assertEqual(original_static, original_receding)
+        self.assertFalse(original_static[1])
+        self.assertTrue(obstacle_restriction(.9, "static", False, .8, .4)[1])
+        self.assertTrue(obstacle_restriction(.9, "moving", True, .8, .4)[1])
 
     def test_static_stops_exactly_at_two_metres(self):
         self.assertEqual(self.policy(2.0, "static"), (0.0, True, "STATIC_PATH_OBSTACLE"))

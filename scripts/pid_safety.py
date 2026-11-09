@@ -52,6 +52,11 @@ CTE_SPEED_FLOOR_MPS = 0.40
 CURVATURE_PREVIEW_M = 2.00                 # Ahead from current route station
 CURVATURE_SPEED_FLOOR_MPS = 0.60
 CURVATURE_FULL_SLOW_AT_INV_M = 0.40        # |kappa|=0.0 -> 0.8, >=0.4 -> 0.6 m/s
+# Limit speed as the chair approaches the final waypoint. The controller still
+# owns final stopping at GOAL_TOLERANCE_M=0.40; keep these distances in sync.
+GOAL_SLOWDOWN_START_M = 3.00              # Remaining route distance for deceleration [m]
+GOAL_TOLERANCE_M = 0.40                    # Matches ff_pid_node.py GOAL_TOLERANCE_M [m]
+GOAL_APPROACH_SPEED_MPS = 0.40            # Retains steering margin above 0.30 m/s wheel minimum
 POSE_MAX_AGE_S = 0.50
 PREDICTED_MAX_AGE_S = 0.30
 OBSTACLE_TIMEOUT_S = 1.00
@@ -174,6 +179,18 @@ def obstacle_speed_cap(distance):
     return OBSTACLE_SLOW_MIN_MPS + ratio * (MAX_SPEED_MPS - OBSTACLE_SLOW_MIN_MPS)
 
 
+def goal_speed_cap(remaining_m):
+    """Linear approach ceiling; final zero-speed command remains FFNode's job."""
+    if remaining_m >= GOAL_SLOWDOWN_START_M:
+        return MAX_SPEED_MPS
+    if remaining_m <= GOAL_TOLERANCE_M:
+        return GOAL_APPROACH_SPEED_MPS
+    fraction = ((remaining_m - GOAL_TOLERANCE_M) /
+                (GOAL_SLOWDOWN_START_M - GOAL_TOLERANCE_M))
+    return GOAL_APPROACH_SPEED_MPS + fraction * (
+        MAX_SPEED_MPS - GOAL_APPROACH_SPEED_MPS)
+
+
 class Safety:
     def __init__(self):
         rospy.init_node("pid_safety")
@@ -189,6 +206,8 @@ class Safety:
                 and CTE_SPEED_START_M >= CTE_DEADZONE_M
                 and CTE_SLOW_PER_M_MPS > 0 and CURVATURE_FULL_SLOW_AT_INV_M > 0
                 and FRONT_STOP_M < FRONT_SLOW_M
+                and 0 < GOAL_TOLERANCE_M < GOAL_SLOWDOWN_START_M
+                and CONTROL_MAX_V_MPS >= GOAL_APPROACH_SPEED_MPS > 0.30
                 and 0 < CORRIDOR_HALF_WIDTH_M and 0 < POLICY_PERIOD_S):
             raise rospy.ROSInitException("Invalid safety parameters")
         repo = os.path.dirname(os.path.dirname(
@@ -319,8 +338,10 @@ class Safety:
         info = {"obstacle_id": None, "obstacle_distance_m": None,
                 "near_gap_m": None, "cte_used_m": None,
                 "corridor_half_width_m": None, "mask_clearance_m": None,
+                "current_mask_clearance_m": None, "predicted_mask_clearance_m": None,
                 "cte_limit_mps": None, "curve_limit_mps": None,
-                "obstacle_limit_mps": None, "preview_curvature_inv_m": None}
+                "obstacle_limit_mps": None, "preview_curvature_inv_m": None,
+                "goal_remaining_m": None, "goal_limit_mps": None}
         if pose is None:
             return "STOP", 0.0, "POSE_MISSING", info
         if received is None or now - received > OBSTACLE_TIMEOUT_S:
@@ -343,13 +364,31 @@ class Safety:
         info["cte_used_m"] = use_cte
         corridor = CORRIDOR_HALF_WIDTH_M + max(0., abs(use_cte) - CTE_DEADZONE_M)
         info["corridor_half_width_m"] = corridor
-        check_pose = predicted_pose if predicted_pose is not None else pose
-        clearance = float(self.mask.clearance_at(check_pose[:2]))
-        info["mask_clearance_m"] = clearance
-        if not math.isfinite(clearance) or clearance < MASK_CLEARANCE_M:
+        # Before RUNNING there is no controller prediction; check the current
+        # position then. Once a prediction is available, require BOTH the
+        # current and predicted chair centres to have enough mask clearance.
+        current_clearance = float(self.mask.clearance_at(pose[:2]))
+        predicted_clearance = (float(self.mask.clearance_at(predicted_pose[:2]))
+                               if predicted_pose is not None else None)
+        clearances = [current_clearance]
+        if predicted_clearance is not None:
+            clearances.append(predicted_clearance)
+        info["current_mask_clearance_m"] = (
+            current_clearance if math.isfinite(current_clearance) else None)
+        info["predicted_mask_clearance_m"] = (
+            predicted_clearance if predicted_clearance is not None
+            and math.isfinite(predicted_clearance) else None)
+        if not all(math.isfinite(value) for value in clearances):
+            return "STOP", 0., "MASK_BOUNDARY", info
+        info["mask_clearance_m"] = min(clearances)
+        if any(value < MASK_CLEARANCE_M for value in clearances):
             return "STOP", 0., "MASK_BOUNDARY", info
 
         cte_cap, curve_cap, curvature = speed_caps(self.route, station, use_cte)
+        goal_remaining = max(0.0, self.route.length - station)
+        goal_cap = goal_speed_cap(goal_remaining)
+        info["goal_remaining_m"] = goal_remaining
+        info["goal_limit_mps"] = goal_cap
         info["cte_limit_mps"] = cte_cap
         info["curve_limit_mps"] = curve_cap
         info["preview_curvature_inv_m"] = curvature
@@ -386,14 +425,16 @@ class Safety:
         info["obstacle_limit_mps"] = obstacle_cap
         if closest is not None and closest <= FRONT_STOP_M:
             return "STOP", 0., "PATH_OBSTACLE", info
-        cap = min(MAX_SPEED_MPS, cte_cap, curve_cap, obstacle_cap)
+        cap = min(MAX_SPEED_MPS, cte_cap, curve_cap, obstacle_cap, goal_cap)
         if cap < MAX_SPEED_MPS - SLOW_THRESHOLD_MPS:
             if cap == obstacle_cap:
                 reason = "PATH_OBSTACLE"
             elif cap == cte_cap:
                 reason = "CTE_LIMIT"
-            else:
+            elif cap == curve_cap:
                 reason = "CURVATURE_LIMIT"
+            else:
+                reason = "GOAL_APPROACH"
             return "SLOW", cap, reason, info
         return "CLEAR", MAX_SPEED_MPS, "NO_RESTRICTION", info
 

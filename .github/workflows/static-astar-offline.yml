@@ -27,7 +27,8 @@ jobs:
         run: |
           python -m py_compile scripts/replan_path.py scripts/receding_motion.py scripts/obstacle_policy.py scripts/pid_astar_planner.py scripts/ff_pid_core.py scripts/ff_pid_node.py scripts/pid_safety.py tests/test_replan_path.py tests/test_obstacle_policy.py
       - name: Run offline planner tests (no ROS/NUC)
-        run: python -m unittest discover -s tests -p 'test_replan_path.py' -v
+        run: |
+          python -m unittest discover -s tests -p 'test_replan_path.py' -v
           python -m unittest discover -s tests -p 'test_obstacle_policy.py' -v
       - name: Check DRIVE/STOP bash syntax
         run: bash -n scripts/pid_drive.sh scripts/pid_stop.sh

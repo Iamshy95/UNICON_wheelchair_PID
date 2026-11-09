@@ -243,7 +243,7 @@ def replan(original_route, mask, pose, station, objects):
                 raw = np.vstack([raw, continuation])
                 suffix_start = int(np.searchsorted(original_route.s, after_s[-1], side="right"))
                 suffix = original_route.xy[suffix_start:]
-                for smoothing in (.20, .03, 0.):
+                for smoothing in (1.05, .20, .03, 0.):
                     try:
                         detour = smooth(raw, smoothing)
                         if not checked_path(mask, detour, pose, boxes, radius):

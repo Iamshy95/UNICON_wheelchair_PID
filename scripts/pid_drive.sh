@@ -134,6 +134,12 @@ for ((i=0; i<35; i++)); do
 done
 [[ "$ready" == 1 ]] || { bash "$STOP" >/dev/null 2>&1 || true; fail "FF-PD 노드 시작 실패. 로그: $LOG"; }
 
+REPLAN_ENABLED=false
+if [[ "${PID_ENABLE_ASTAR:-false}" == "true" && "$TEST_CLEAR" != "true" ]]; then
+  REPLAN_ENABLED=true
+  printf '[WARN] Experimental autonomous A* detour enabled. Unvalidated on real wheelchair.\n' >&2
+fi
+if [[ "$REPLAN_ENABLED" == "true" ]]; then
 ASTAR_LOG="$RUN_DIR/pid_astar_${ROUTE}_$(date +%Y%m%d_%H%M%S).log"
 setsid nohup env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   python3 -u "$ASTAR" > "$ASTAR_LOG" 2>&1 < /dev/null &
@@ -151,13 +157,9 @@ done
   bash "$STOP" >/dev/null 2>&1 || true
   fail "A* planner startup failed: $ASTAR_LOG"
 }
+fi
 SAFETY_LOG="$RUN_DIR/pid_safety_${ROUTE}_$(date +%Y%m%d_%H%M%S).log"
 # Always overwrite the private ROS param: the previous test=true can survive node exit.
-REPLAN_ENABLED=false
-if [[ "${PID_ENABLE_ASTAR:-false}" == "true" && "$TEST_CLEAR" != "true" ]]; then
-  REPLAN_ENABLED=true
-  printf '[WARN] Experimental autonomous A* detour enabled. Unvalidated on real wheelchair.\n' >&2
-fi
 SAFETY_PARAMS=("_route:=$ROUTE" "_test_clear:=false" "_enable_replan:=$REPLAN_ENABLED")
 if [[ "$TEST_CLEAR" == true ]]; then
   SAFETY_PARAMS=("_route:=$ROUTE" "_test_clear:=true" "_enable_replan:=false")

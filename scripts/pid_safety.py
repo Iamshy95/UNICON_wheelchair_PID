@@ -10,6 +10,7 @@ import math
 import os
 import sys
 import threading
+import uuid
 from collections import deque
 
 import numpy as np
@@ -18,11 +19,12 @@ import rospkg
 import tf.transformations as tft
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
-from std_msgs.msg import String
+from std_msgs.msg import String, Int16MultiArray
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ff_pid_core import Route, CTE_DEADZONE_M as CONTROL_CTE_DEADZONE_M
 from ff_pid_core import MAX_V_MPS as CONTROL_MAX_V_MPS
+from replan_path import checked_path, static_boxes, OBSTACLE_RADIUS_M, MASK_RESERVE_M
 
 localization_scripts = os.path.join(
     rospkg.RosPack().get_path("static_livox_localization"), "scripts")
@@ -65,6 +67,10 @@ STOP_CLEAR_CONFIRM_S = 0.30               # Brief stable clear before restart
 SLOW_THRESHOLD_MPS = 0.005                # Avoid float noise at MAX_SPEED
 MAX_OBJECTS = 200
 MAX_PROFILE_SAMPLES = 500
+REPLAN_TIMEOUT_S = 12.0
+REPLAN_HANDSHAKE_TIMEOUT_S = 8.0
+REPLAN_WHEEL_STOP_MPS = 0.06
+REPLAN_WHEEL_MAX_AGE_S = 0.35
 # ===============================================================
 
 ROUTES = ("A_to_D4", "A_to_D5", "D4_to_A",
@@ -236,6 +242,21 @@ class Safety:
         self.predicted_cte, self.predicted_pose, self.predicted_at = None, None, None
         self.objects, self.objects_at = None, None
         self.station = None
+        self.route_version = "original"
+        self.controller_ever_running = False
+        self.wheel_pair = None
+        self.wheel_at = None
+        self.replan_mode = "IDLE"
+        self.replan_id = None
+        self.replan_started = None
+        self.replan_candidate = None
+        self.replan_obstacle_id = None
+        self.replan_pose = None
+        self.replan_error = None
+        self.request_pub = rospy.Publisher("/ff_pid/replan/request", String, queue_size=1)
+        self.stage_pub = rospy.Publisher("/ff_pid/replan/stage", String, queue_size=1)
+        self.commit_pub = rospy.Publisher("/ff_pid/replan/commit", String, queue_size=1)
+        self.applied_pub = rospy.Publisher("/ff_pid/active_route", String, queue_size=1, latch=True)
         self.last_state, self.last_reason = None, None
         self.release_since = None
         self.policy_pub = rospy.Publisher("/ff_pid/motion_policy", String, queue_size=2)
@@ -246,6 +267,9 @@ class Safety:
         rospy.Subscriber("/ff_pid/status", String, self.on_controller, queue_size=3)
         rospy.Subscriber("/perception/objects_summary", String,
                          self.on_obstacles, queue_size=3)
+        rospy.Subscriber("/wheel_status", Int16MultiArray, self.on_wheel, queue_size=5)
+        rospy.Subscriber("/ff_pid/replan/candidate", String, self.on_candidate, queue_size=1)
+        rospy.Subscriber("/ff_pid/replan/ack", String, self.on_replan_ack, queue_size=5)
         rospy.Timer(rospy.Duration(POLICY_PERIOD_S), self.tick)
         if self.test_clear:
             rospy.logwarn("TEST_CLEAR bypasses real obstacle protection: NEVER use for occupied driving.")
@@ -315,11 +339,14 @@ class Safety:
                 return
             if data.get("route") not in (None, self.route_name):
                 return
+            if data.get("route_version", "original") != self.route_version:
+                return
             cte = float(data["predicted_cte"])
             pose = tuple(float(v) for v in data["predicted_pose"])
             if len(pose) != 3 or not all(math.isfinite(v) for v in pose + (cte,)):
                 return
             with self.lock:
+                self.controller_ever_running = True
                 self.predicted_cte, self.predicted_pose = cte, pose
                 self.predicted_at = rospy.Time.now().to_sec()
         except (TypeError, ValueError, KeyError, OverflowError):

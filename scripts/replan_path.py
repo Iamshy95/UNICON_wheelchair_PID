@@ -159,7 +159,9 @@ def visible(mask, free, offset, a, b):
     row, col, valid = mask._cells(segment)
     rr, cc = row - offset[0], col - offset[1]
     inbounds = valid & (rr >= 0) & (cc >= 0) & (rr < free.shape[0]) & (cc < free.shape[1])
-    if not inbounds.all() or not free[rr, cc].all():
+    if not inbounds.all():
+        return False
+    if not free[rr, cc].all():
         return False
     # The authoritative mask's supercover rejects diagonal corner-touch cases.
     return bool(mask.segment_is_contained(a, b))

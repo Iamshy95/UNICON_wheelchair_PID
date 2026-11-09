@@ -204,6 +204,7 @@ class Safety:
         if self.route_name not in ROUTES:
             raise rospy.ROSInitException("Invalid route: " + self.route_name)
         self.test_clear = bool(rospy.get_param("~test_clear", False))
+        self.enable_replan = bool(rospy.get_param("~enable_replan", False)) and not self.test_clear
         if abs(CTE_DEADZONE_M - CONTROL_CTE_DEADZONE_M) > 1e-9:
             raise rospy.ROSInitException("Safety/Core CTE deadzones differ")
         if not (0 < OBSTACLE_SLOW_MIN_MPS <= MAX_SPEED_MPS
@@ -458,6 +459,12 @@ class Safety:
                 if (np.linalg.norm(route.xy[0] - np.asarray(pose[:2])) > .30 or
                         np.linalg.norm(route.xy[-1] - self.route.xy[-1]) > .12):
                     raise ValueError("wrong start or final goal")
+                if not any(
+                        isinstance(obj, dict) and obj.get("id") == self.replan_obstacle_id
+                        and obj.get("motion") == "static"
+                        for obj in self.objects["objects"]):
+                    self.cancel_replan()
+                    return
                 boxes = static_boxes(self.objects["objects"])
                 if not checked_path(self.mask, route.xy, pose, boxes,
                                     OBSTACLE_RADIUS_M[0], MASK_RESERVE_M):
@@ -507,7 +514,7 @@ class Safety:
             return
 
     def update_replan(self, now, state, reason, pose, info, objects):
-        if self.test_clear or self.route_version != "original":
+        if not self.enable_replan or self.route_version != "original":
             return
         if self.replan_mode in ("PLANNING", "STAGING", "FAILED"):
             # If the original route becomes clear, discard the detour instead.

@@ -377,3 +377,22 @@ bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.
 | NUC가 최신 기능을 모름 | 사용 중인 배포 디렉터리가 최신 GitHub PID 코드와 동기화됐는지 확인 |
 
 **검증 범위:** READY 장치 초기화 및 일부 통합 검사는 이전 NUC 배포에서 수행했지만, 이후 변경된 FF–PD + Safety + 출발 위치 검사 전체에 대한 **실차 통합 검증은 완료되지 않았습니다**. 소프트웨어 감시·정지 기능은 실제 휠체어의 물리적 정지 수단을 대체하지 않습니다.
+
+## 실험 기능: 정적 장애물 A* 우회 (feature/static-obstacle-astar-replan)
+
+> **실험 기능, 실차 검증 전. 기본값 OFF.** 개인 저장소 브랜치의 코드를 수정해도 팀 배포나 NUC에는 반영되지 않습니다. 장애물 팽창 반경·곡선 추종 가능성·응답 시간은 실차로 검증되지 않았으며, 탑승자 없이 감독 하에만 시험해야 합니다. 원본 6개 JSON은 수정하지 않습니다.
+
+- 기본값은 **A*와 동적 멀어짐 감속 완화 모두 OFF**입니다. DRIVE를 시작하는 동일 셸에서 A*는 `export PID_ENABLE_ASTAR=true`, 멀어짐 감속 완화는 `export PID_ENABLE_RECEDING=true`로 각각 활성화합니다. `_test_clear:=true`에서는 두 기능을 모두 끕니다. 두 변수가 모두 꺼져 있으면 기존 경로상 장애물 감속(2m→1m) 및 정지(1m 이내) 기준을 유지합니다.
+- DRIVE는 우회 기능을 명시적으로 켠 경우에만 기존 FF–PD 및 Safety 외에 `pid_astar_planner.py`를 실행합니다. STOP은 3개 노드를 함께 종료하며 READY 센서/로컬라이제이션은 유지합니다.
+- **A* 활성화 시 정적 장애물**은 경로 앞쪽 **2.0m 이내**에서 `PATH_OBSTACLE`로 STOP합니다. 물리적 바퀴 정지와 `static` 판정을 확인하면 별도 고정 대기 없이 A* 요청을 시작합니다.
+- **동적 완화 활성화 시 이동 장애물**이 실제로 **휠체어로부터 지속적으로 멀어짐**을 최소 0.6초 이상 확인한 경우에만 1~2m 구간의 장애물 감속을 무시합니다. 1m 이하에서는 저속 제한(현재 0.4m/s)을 적용하며, 아주 가까운 물체(기존 `NEAR_STOP_GAP_M`)는 무조건 STOP합니다. 멀어짐을 확인하지 못한 `moving`, `unknown` 객체에는 기존 Safety 정지·감속을 그대로 적용합니다.
+- `moving`과 `unknown`은 A* 장애물 지도에서 제외하지만 **Safety의 지속적인 충돌 감시 대상**입니다. `/perception/objects_summary` 객체 ID/위치 이력을 사용한 상대거리 변화 판정은 보수적 초기 설정이며 실주행 노이즈 검증이 필요합니다.
+- 플래너는 원래 10cm 마스크에 정적 AABB 장애물을 팽창(현재 **임시 설정** 0.70 → 0.80 → 0.90m)해 8방향 A*를 실행하고, Line-of-Sight 꺾임 제거 → 5차 B-Spline 시도 → 10cm Waypoint 및 Yaw 재생성 → 기존 경로 후방 합류를 수행합니다.
+- Safety는 최종 경로 전체의 마스크 여유와 정적 장애물 충돌을 재검증합니다. 실패하거나 시간 초과라면 `STOP`을 유지합니다.
+- `/ff_pid/replan/request` → `/ff_pid/replan/candidate` → `/ff_pid/replan/stage` → `/ff_pid/replan/ack`(PREPARED) → `/ff_pid/replan/commit` → ACK(APPLIED) 순서입니다. ACK 전까지 `REPLAN_HOLD` 정책으로 정지합니다.
+- Safety와 FF–PD가 동일한 `route_version`을 사용해야만 CLEAR/SLOW 주행이 허용됩니다. 성공한 경로는 **메모리에서만 교체**합니다. 새 경로 좌표는 `/ff_pid/active_route`에 `type: route` 형태로 발행하지만, **개인 Android Bluetooth 브릿지의 자동 전달은 아직 구현하지 않았습니다.**
+- 탐색/준비 중 기존 경로의 장애물이 해소되면 후보를 폐기하고 기존 경로를 재개합니다. 이미 COMMIT 단계에 진입했으면 두 경로 버전이 엇갈리지 않도록 적용 절차를 마칩니다.
+- 첫 우회 후 추가 우회는 이번 MVP에서 지원하지 않습니다. 새 경로에 또 장애물이 생기면 기존 Safety가 STOP을 명령합니다. 시작 방향·곡률 가용성에 대한 추가 경로 검증도 MVP에 없습니다. **부드러운 수학적 곡선이 물리적으로 추종 가능한 경로라는 의미는 아닙니다.**
+
+오프라인 테스트: `python -m unittest discover -s tests -p 'test_replan_path.py' -v` 및 `python -m unittest discover -s tests -p 'test_obstacle_policy.py' -v` (numpy 및 scipy 필요). 실차를 움직이는 통합 시험은 수행하지 않았습니다.
+

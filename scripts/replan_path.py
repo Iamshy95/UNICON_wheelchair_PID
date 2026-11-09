@@ -13,7 +13,7 @@ from scipy.interpolate import splprep, splev
 
 # Initial conservative planning values, NOT validated wheelchair dimensions.
 MASK_RESERVE_M = 0.30
-OBSTACLE_RADIUS_M = (0.70, 0.80, 0.90)
+OBSTACLE_RADIUS_M = (0.50, 0.60, 0.70)
 GRID_MARGIN_M = 8.0
 MAX_SEARCH_CELLS = 250000
 MAX_EXPANSIONS = 120000

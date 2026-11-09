@@ -6,6 +6,7 @@ request validity, obstacle persistence, collision checking and path commit.
 """
 import json
 import os
+import sys
 import threading
 
 import rospy
@@ -13,6 +14,10 @@ import rospkg
 from std_msgs.msg import String
 
 from ff_pid_core import Route
+
+localization_scripts = os.path.join(
+    rospkg.RosPack().get_path("static_livox_localization"), "scripts")
+sys.path.insert(0, localization_scripts)
 from replan_path import replan
 
 ROUTES = ("A_to_D4", "A_to_D5", "D4_to_A", "D4_to_D5", "D5_to_A", "D5_to_D4")

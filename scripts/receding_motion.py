@@ -105,6 +105,11 @@ class RecedingTracks:
         ranges = [math.hypot(h[1], h[2]) for h in recent]
         if any(new < old - 1e-3 for old, new in zip(ranges[:-1], ranges[1:])):
             return False
+        # An object can recede in range while moving sideways into our lane.
+        # Refuse the exemption if lateral separation is shrinking materially.
+        lateral = [abs(h[2]) for h in history]
+        if min(lateral) < lateral[0] - 0.08 or lateral[-1] < lateral[0] - 0.05:
+            return False
         return (delta_range >= MIN_RANGE_INCREASE_M and
                 delta_forward >= MIN_FORWARD_INCREASE_M and
                 delta_range / elapsed >= MIN_SEPARATION_RATE_MPS)

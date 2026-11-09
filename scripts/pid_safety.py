@@ -666,11 +666,20 @@ class Safety:
                 state, cap, reason, info = "STOP", 0., "SAFETY_EXCEPTION", {}
                 self.release_since = None
                 rospy.logerr_throttle(2, "Safety decision failed: %s", exc)
+            # During a path transaction, motion is held regardless of old-path
+            # clearance; only an APPLIED acknowledgement releases the hold.
+            if not self.test_clear:
+                self.update_replan(now, state, reason, pose, info, objects)
+                if self.replan_mode in ("PLANNING", "STAGING", "COMMITTING", "FAILED"):
+                    state, cap, reason = "STOP", 0., "REPLAN_HOLD"
             # One message atomically couples policy to its speed ceiling.
             policy = {"state": state, "speed_limit_mps": cap,
-                      "route": self.route_name, "stamp": now, "reason": reason}
+                      "route": self.route_name, "route_version": self.route_version,
+                      "stamp": now, "reason": reason}
             self.policy_pub.publish(String(data=json.dumps(policy, separators=(",", ":"))))
             status = dict(policy, **info)
+            status["replan_state"] = self.replan_mode
+            status["replan_error"] = self.replan_error
             status["predicted_available"] = bool(pred_pose is not None)
             self.status_pub.publish(String(data=json.dumps(
                 status, separators=(",", ":"), allow_nan=False)))

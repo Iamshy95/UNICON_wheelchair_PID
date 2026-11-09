@@ -111,8 +111,11 @@ def limit_running_command(previous_v, previous_w, target_v, target_w, dt,
 
 class Route:
     def __init__(self, filename):
-        with open(filename, encoding="utf-8") as f:
-            self.metadata = json.load(f)
+        if isinstance(filename, dict):
+            self.metadata = filename
+        else:
+            with open(filename, encoding="utf-8") as f:
+                self.metadata = json.load(f)
         data = self.metadata
         if data.get("frame") != "map" or data.get("count") != len(data.get("waypoints", [])):
             raise ValueError("bad route frame/count")

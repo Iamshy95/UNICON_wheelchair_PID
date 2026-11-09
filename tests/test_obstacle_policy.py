@@ -90,6 +90,29 @@ class RecedingMotionTests(unittest.TestCase):
                         "objects": []})
         self.assertFalse(monitor.receding(41, 11.1))
 
+    def test_stale_source_cannot_claim_receding(self):
+        monitor = RecedingTracks()
+        for t, x in ((10., 1.), (10.2, 1.08), (10.4, 1.18),
+                     (10.6, 1.27), (10.8, 1.34)):
+            monitor.update(box(t, x))
+        self.assertTrue(monitor.receding(41, 10.8, now=10.8))
+        self.assertFalse(monitor.receding(41, 10.8, now=11.3))
+
+    def test_reversing_last_frames_cannot_claim_receding(self):
+        monitor = RecedingTracks()
+        for t, x in ((10., 1.), (10.2, 1.16), (10.4, 1.34),
+                     (10.6, 1.46), (10.8, 1.43), (11.0, 1.40)):
+            monitor.update(box(t, x))
+        self.assertFalse(monitor.receding(41, 11.0, now=11.0))
+
+    def test_lateral_approach_cannot_claim_receding(self):
+        monitor = RecedingTracks()
+        for t, x, y in ((10., 1., .5), (10.2, 1.1, .45),
+                        (10.4, 1.2, .40), (10.6, 1.3, .35),
+                        (10.8, 1.4, .30)):
+            monitor.update(box(t, x, y=y))
+        self.assertFalse(monitor.receding(41, 10.8, now=10.8))
+
     def test_duplicate_fusion_timestamp_is_not_extra_evidence(self):
         monitor = RecedingTracks()
         for _ in range(10):

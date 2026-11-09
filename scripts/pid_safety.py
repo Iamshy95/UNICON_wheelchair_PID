@@ -360,6 +360,180 @@ class Safety:
         with self.lock:
             self.objects, self.objects_at = objects, rospy.Time.now().to_sec()
 
+    def on_wheel(self, msg):
+        # Read feedback, never assume that commanded zero equals physical stop.
+        try:
+            values = msg.data
+            if len(values) < 6:
+                return
+            def decode(direction, magnitude):
+                if int(direction) not in (67, 87, 83) or not 33 <= int(magnitude) <= 127:
+                    raise ValueError("invalid wheel")
+                if int(direction) == 83:
+                    return 0.
+                return (int(magnitude) - 33) / 36. * (1 if int(direction) == 67 else -1)
+            pair = (decode(values[2], values[3]), decode(values[4], values[5]))
+            with self.lock:
+                self.wheel_pair = pair if int(values[1]) == 65 else None
+                self.wheel_at = rospy.Time.now().to_sec()
+        except (ValueError, TypeError, IndexError):
+            with self.lock:
+                self.wheel_pair, self.wheel_at = None, None
+
+    def wheels_stopped(self, now):
+        return (self.wheel_pair is not None and self.wheel_at is not None
+                and now - self.wheel_at <= REPLAN_WHEEL_MAX_AGE_S
+                and all(abs(v) <= REPLAN_WHEEL_STOP_MPS for v in self.wheel_pair))
+
+    def cancel_replan(self):
+        # A late candidate/ack from this plan_id is ignored thereafter.
+        self.replan_mode = "IDLE"
+        self.replan_id = None
+        self.replan_candidate = None
+        self.replan_obstacle_id = None
+        self.replan_pose = None
+        self.replan_started = None
+        self.replan_error = None
+
+    def begin_replan(self, now, pose, info, objects):
+        if not self.controller_ever_running or not self.wheels_stopped(now):
+            return False
+        if not isinstance(objects, dict) or objects.get("status") != "OK":
+            return False
+        obstacle_id = info.get("obstacle_id")
+        blocking = any(
+            isinstance(obj, dict) and obj.get("id") == obstacle_id and
+            obj.get("motion") == "static" and obj.get("band_relation") != "outside"
+            for obj in objects.get("objects", []))
+        if not blocking:
+            return False
+        self.replan_id = uuid.uuid4().hex
+        self.replan_mode = "PLANNING"
+        self.replan_started = now
+        self.replan_pose = pose
+        self.replan_obstacle_id = obstacle_id
+        self.replan_candidate = None
+        self.request_pub.publish(String(data=json.dumps({
+            "plan_id": self.replan_id, "route": self.route_name,
+            "pose": list(pose), "station": float(self.station),
+            "objects": objects["objects"]}, separators=(",", ":"), allow_nan=False)))
+        rospy.loginfo("Safety requested static detour for obstacle %s", obstacle_id)
+        return True
+
+    def on_candidate(self, msg):
+        try:
+            data = json.loads(msg.data)
+            with self.lock:
+                if (self.replan_mode != "PLANNING" or
+                        data.get("plan_id") != self.replan_id or
+                        data.get("route") != self.route_name):
+                    return
+                if data.get("status") != "OK":
+                    self.replan_error = str(data.get("error", "NO_PATH"))[:160]
+                    self.replan_mode = "FAILED"
+                    return
+                now = rospy.Time.now().to_sec()
+                pose = self.current_pose(now)
+                if (pose is None or self.replan_pose is None or
+                        math.hypot(pose[0] - self.replan_pose[0],
+                                   pose[1] - self.replan_pose[1]) > .25 or
+                        not self.wheels_stopped(now) or
+                        self.objects_at is None or now - self.objects_at > OBSTACLE_TIMEOUT_S or
+                        not isinstance(self.objects, dict) or
+                        self.objects.get("status") != "OK" or
+                        self.objects.get("frame") != "chair_centre"):
+                    self.replan_mode, self.replan_error = "FAILED", "INPUT_CHANGED"
+                    return
+                # A worker result is untrusted. Safety rechecks the actual curve.
+                meta = data["metadata"]
+                if (not isinstance(meta, dict) or meta.get("route_key") != self.route_name or
+                        meta.get("source") != "runtime_static_astar" or
+                        meta.get("frame") != "map" or
+                        meta.get("reference_point") != "chair_centre" or
+                        meta.get("body_frame_profile") != self.route.metadata["body_frame_profile"] or
+                        meta.get("chair_centre_in_body_xyz") != self.route.metadata["chair_centre_in_body_xyz"] or
+                        len(meta.get("waypoints", [])) > 10000):
+                    raise ValueError("candidate metadata rejected")
+                route = Route(meta)
+                if (np.linalg.norm(route.xy[0] - np.asarray(pose[:2])) > .30 or
+                        np.linalg.norm(route.xy[-1] - self.route.xy[-1]) > .12):
+                    raise ValueError("wrong start or final goal")
+                boxes = static_boxes(self.objects["objects"])
+                if not checked_path(self.mask, route.xy, pose, boxes,
+                                    OBSTACLE_RADIUS_M[0], MASK_RESERVE_M):
+                    raise ValueError("candidate fails current Safety collision validation")
+                # Safety never changes active path before FF-PD acknowledges commit.
+                self.replan_candidate = route
+                self.replan_mode = "STAGING"
+                self.replan_started = now
+                rospy.loginfo("Safety accepted candidate, staging route %s", self.replan_id)
+        except Exception as exc:
+            with self.lock:
+                if self.replan_mode == "PLANNING":
+                    self.replan_mode, self.replan_error = "FAILED", str(exc)[:160]
+            rospy.logwarn("Rejected replan candidate: %s", exc)
+
+    def on_replan_ack(self, msg):
+        try:
+            ack = json.loads(msg.data)
+            with self.lock:
+                if (ack.get("route") != self.route_name or
+                        ack.get("plan_id") != self.replan_id or
+                        not ack.get("ok")):
+                    return
+                if self.replan_mode == "STAGING" and ack.get("phase") == "PREPARED":
+                    self.replan_mode = "COMMITTING"
+                    self.replan_started = rospy.Time.now().to_sec()
+                elif self.replan_mode == "COMMITTING" and ack.get("phase") == "APPLIED":
+                    if ack.get("route_version") != self.replan_id:
+                        return
+                    if self.replan_candidate is None:
+                        return
+                    self.route = self.replan_candidate
+                    self.station = None
+                    self.route_version = self.replan_id
+                    self.replan_mode = "ACTIVE"
+                    self.replan_candidate = None
+                    self.predicted_cte, self.predicted_pose, self.predicted_at = None, None, None
+                    self.applied_pub.publish(String(data=json.dumps({
+                        "type": "route", "route": self.route_name,
+                        "route_version": self.route_version, "frame": "map",
+                        "count_full": len(self.route.xy),
+                        "points": [{"x": float(p[0]), "y": float(p[1])}
+                                   for p in self.route.xy[::max(1, int(math.ceil(len(self.route.xy) / 400)))]]
+                    }, separators=(",", ":"))))
+                    rospy.loginfo("Safety/FF-PD switched to route %s", self.route_version)
+        except (ValueError, TypeError, KeyError):
+            return
+
+    def update_replan(self, now, state, reason, pose, info, objects):
+        if self.test_clear or self.route_version != "original":
+            return
+        if self.replan_mode in ("PLANNING", "STAGING", "FAILED"):
+            # If the original route becomes clear, discard the detour instead.
+            if state in ("CLEAR", "SLOW"):
+                self.cancel_replan()
+                return
+        if self.replan_mode in ("PLANNING", "STAGING", "COMMITTING"):
+            if (self.replan_started is None or
+                    now - self.replan_started > (
+                        REPLAN_TIMEOUT_S if self.replan_mode == "PLANNING"
+                        else REPLAN_HANDSHAKE_TIMEOUT_S)):
+                self.replan_mode, self.replan_error = "FAILED", "REPLAN_TIMEOUT"
+                return
+            if self.replan_mode == "STAGING" and self.replan_candidate is not None:
+                self.stage_pub.publish(String(data=json.dumps({
+                    "plan_id": self.replan_id,
+                    "metadata": self.replan_candidate.metadata},
+                    separators=(",", ":"), allow_nan=False)))
+            elif self.replan_mode == "COMMITTING":
+                self.commit_pub.publish(String(data=json.dumps({
+                    "plan_id": self.replan_id}, separators=(",", ":"))))
+        if (self.replan_mode == "IDLE" and state == "STOP" and
+                reason == "PATH_OBSTACLE" and pose is not None and
+                self.station is not None):
+            self.begin_replan(now, pose, info, objects)
+
     def decide(self, now, pose, predicted_pose, predicted_cte, objects, received):
         """Return raw policy with diagnostics. Any untrusted input fails closed."""
         info = {"obstacle_id": None, "obstacle_distance_m": None,

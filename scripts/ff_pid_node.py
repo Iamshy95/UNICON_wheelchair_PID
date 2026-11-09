@@ -119,6 +119,8 @@ class FFNode:
         route_path, mask_path = selected_route_and_mask(route_name)
         profile = str(rospy.get_param("~body_frame_profile", "builtin"))
         self.route = Route(route_path)
+        self.route_version = "original"
+        self.pending_replan = None
         metadata = self.route.metadata
         if metadata.get("reference_point") != REFERENCE_CHAIR_CENTRE:
             raise rospy.ROSInitException("only chair-centred routes are allowed")
@@ -208,11 +210,14 @@ class FFNode:
         self.max_diag_age = float(rospy.get_param("~max_diag_age", MAX_DIAG_AGE_S))
         self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
         self.status = rospy.Publisher("/ff_pid/status", String, queue_size=3)
+        self.replan_ack = rospy.Publisher("/ff_pid/replan/ack", String, queue_size=3)
         rospy.Subscriber("/fast_lio_icp/pose", PoseWithCovarianceStamped,
                          self.on_pose, queue_size=5)
         rospy.Subscriber("/Odometry", Odometry, self.on_odom, queue_size=50)
         rospy.Subscriber("/ff_pid/motion_policy", String,
                          self.on_motion_policy, queue_size=2)
+        rospy.Subscriber("/ff_pid/replan/stage", String, self.on_replan_stage, queue_size=1)
+        rospy.Subscriber("/ff_pid/replan/commit", String, self.on_replan_commit, queue_size=1)
         rospy.Subscriber("/wheel_status", Int16MultiArray,
                          self.on_wheel, queue_size=5)
         rospy.Subscriber("/fast_lio_icp/localization_diagnostics", DiagnosticArray,
@@ -310,6 +315,8 @@ class FFNode:
                 raise ValueError("inconsistent, stale or wrong-route safety policy")
             if state == "CLEAR" and cap < self.core.max_v - 1e-6:
                 raise ValueError("CLEAR must not impose a speed limit")
+            if state != "STOP" and data.get("route_version", "original") != self.route_version:
+                raise ValueError("Safety and FF-PD route revisions differ")
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             with self.lock:
                 self.policy_received = None
@@ -329,7 +336,7 @@ class FFNode:
                 # Perception faults, bad geometry and mask boundary faults require
                 # an explicit new /ff_pid/start after the fault is resolved.
                 can_resume = data.get("reason") in (
-                    "PATH_OBSTACLE", "VERY_CLOSE_OBJECT", "RELEASE_CONFIRM")
+                    "PATH_OBSTACLE", "VERY_CLOSE_OBJECT", "RELEASE_CONFIRM", "REPLAN_HOLD")
                 if self.enabled:
                     self.resume_after_obstacle = can_resume
                     self.obstacle_stopped = can_resume
@@ -590,7 +597,8 @@ class FFNode:
     def publish_status(self, state, result=None):
         if state != self.reason or result is not None:
             self.reason = state
-            values = {"state": state}
+            values = {"state": state, "route": self.route_name,
+                      "route_version": self.route_version}
             if result is not None:
                 values.update(result)  # publish same FF-PD prediction to Safety
             self.status.publish(String(data=json.dumps(values)))

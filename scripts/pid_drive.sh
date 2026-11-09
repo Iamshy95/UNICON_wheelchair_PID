@@ -160,9 +160,14 @@ done
 fi
 SAFETY_LOG="$RUN_DIR/pid_safety_${ROUTE}_$(date +%Y%m%d_%H%M%S).log"
 # Always overwrite the private ROS param: the previous test=true can survive node exit.
-SAFETY_PARAMS=("_route:=$ROUTE" "_test_clear:=false" "_enable_replan:=$REPLAN_ENABLED")
+RECEDING_ENABLED=false
+if [[ "${PID_ENABLE_RECEDING:-false}" == "true" && "$TEST_CLEAR" != "true" ]]; then
+  RECEDING_ENABLED=true
+  printf '[WARN] Experimental receding-object slowdown relaxation enabled.\n' >&2
+fi
+SAFETY_PARAMS=("_route:=$ROUTE" "_test_clear:=false" "_enable_replan:=$REPLAN_ENABLED" "_enable_receding:=$RECEDING_ENABLED")
 if [[ "$TEST_CLEAR" == true ]]; then
-  SAFETY_PARAMS=("_route:=$ROUTE" "_test_clear:=true" "_enable_replan:=false")
+  SAFETY_PARAMS=("_route:=$ROUTE" "_test_clear:=true" "_enable_replan:=false" "_enable_receding:=false")
   printf '[WARN] TEST CLEAR: 장애물/마스크 감시 없이 CLEAR만 발행합니다.\n' >&2
 fi
 setsid nohup env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \

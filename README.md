@@ -383,8 +383,10 @@ bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.
 > **개발 브랜치 전용, 실차 검증 전. 기본값 OFF.** 개인 저장소 브랜치의 코드를 수정해도 팀 배포나 NUC에는 반영되지 않습니다. 장애물 팽창 반경·곡선 추종 가능성·응답 시간은 실차로 검증되지 않았으며, 탑승자 없이 감독 하에만 시험해야 합니다. 원본 6개 JSON은 수정하지 않습니다.
 
 - 초기 설정: `PID_ENABLE_ASTAR=false` (기본값). 실험 시에만 **DRIVE를 시작하는 동일한 셸에서** `export PID_ENABLE_ASTAR=true`로 설정합니다. `_test_clear:=true`로 실행하면 자동 우회는 무조건 비활성화됩니다.
-- DRIVE는 기존 FF–PD와 Safety 외에 `pid_astar_planner.py`를 실행합니다. STOP은 3개 노드를 함께 종료하며 READY 센서/로컬라이제이션은 유지합니다.
-- Safety가 `PATH_OBSTACLE`로 정지시키고, 실제 바퀴가 멈췄으며, 해당 인식 객체가 이미 `static`이면 **추가 대기 없이** A* 탐색을 요청합니다. `moving`과 `unknown`은 A* 지도에서 제외하지만 Safety에는 계속 반영됩니다.
+- DRIVE는 우회 기능을 명시적으로 켠 경우에만 기존 FF–PD 및 Safety 외에 `pid_astar_planner.py`를 실행합니다. STOP은 3개 노드를 함께 종료하며 READY 센서/로컬라이제이션은 유지합니다.
+- **정적 장애물**은 경로 앞쪽 **2.0m 이내**에서 `PATH_OBSTACLE`로 STOP합니다. 물리적 바퀴 정지와 `static` 판정을 확인하면 별도 고정 대기 없이 A* 요청을 시작합니다.
+- **동적 장애물**이 실제로 **휠체어로부터 지속적으로 멀어짐**을 최소 0.6초 이상 확인한 경우에만 1~2m 구간의 장애물 감속을 무시합니다. 1m 이하에서는 저속 제한(현재 0.4m/s)을 적용하며, 아주 가까운 물체(기존 `NEAR_STOP_GAP_M`)는 무조건 STOP합니다. 멀어짐을 확인하지 못한 `moving`, `unknown` 객체에는 기존 Safety 정지·감속을 그대로 적용합니다.
+- `moving`과 `unknown`은 A* 장애물 지도에서 제외하지만 **Safety의 지속적인 충돌 감시 대상**입니다. `/perception/objects_summary` 객체 ID/위치 이력을 사용한 상대거리 변화 판정은 보수적 초기 설정이며 실주행 노이즈 검증이 필요합니다.
 - 플래너는 원래 10cm 마스크에 정적 AABB 장애물을 팽창(현재 **임시 설정** 0.70 → 0.80 → 0.90m)해 8방향 A*를 실행하고, Line-of-Sight 꺾임 제거 → 5차 B-Spline 시도 → 10cm Waypoint 및 Yaw 재생성 → 기존 경로 후방 합류를 수행합니다.
 - Safety는 최종 경로 전체의 마스크 여유와 정적 장애물 충돌을 재검증합니다. 실패하거나 시간 초과라면 `STOP`을 유지합니다.
 - `/ff_pid/replan/request` → `/ff_pid/replan/candidate` → `/ff_pid/replan/stage` → `/ff_pid/replan/ack`(PREPARED) → `/ff_pid/replan/commit` → ACK(APPLIED) 순서입니다. ACK 전까지 `REPLAN_HOLD` 정책으로 정지합니다.

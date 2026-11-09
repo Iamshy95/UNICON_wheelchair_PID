@@ -104,7 +104,7 @@ class TestReplan(unittest.TestCase):
         self.assertAlmostEqual(planned["waypoints"][-1]["x"], 20., places=2)
         path = np.asarray([[p["x"], p["y"]] for p in planned["waypoints"]])
         self.assertTrue(checked_path(mask, path, (1.7, 0., 0.),
-                                     static_boxes(obstacle), .7))
+                                     static_boxes(obstacle), OBSTACLE_RADIUS_M[0]))
 
 
 if __name__ == "__main__":

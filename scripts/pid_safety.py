@@ -71,6 +71,7 @@ MAX_OBJECTS = 200
 MAX_PROFILE_SAMPLES = 500
 REPLAN_TIMEOUT_S = 12.0
 REPLAN_HANDSHAKE_TIMEOUT_S = 8.0
+REPLAN_STAGE_RETRY_S = 1.0
 REPLAN_WHEEL_STOP_MPS = 0.06
 REPLAN_WHEEL_MAX_AGE_S = 0.35
 # ===============================================================
@@ -253,6 +254,7 @@ class Safety:
         self.replan_mode = "IDLE"
         self.replan_id = None
         self.replan_started = None
+        self.replan_stage_sent_at = None
         self.replan_candidate = None
         self.replan_obstacle_id = None
         self.replan_pose = None
@@ -415,6 +417,7 @@ class Safety:
         self.replan_id = uuid.uuid4().hex
         self.replan_mode = "PLANNING"
         self.replan_started = now
+        self.replan_stage_sent_at = None
         self.replan_pose = pose
         self.replan_obstacle_id = obstacle_id
         self.replan_candidate = None
@@ -477,6 +480,7 @@ class Safety:
                 self.replan_candidate = route
                 self.replan_mode = "STAGING"
                 self.replan_started = now
+                self.replan_stage_sent_at = None
                 rospy.loginfo("Safety accepted candidate, staging route %s", self.replan_id)
         except Exception as exc:
             with self.lock:
@@ -532,11 +536,14 @@ class Safety:
                         else REPLAN_HANDSHAKE_TIMEOUT_S)):
                 self.replan_mode, self.replan_error = "FAILED", "REPLAN_TIMEOUT"
                 return
-            if self.replan_mode == "STAGING" and self.replan_candidate is not None:
+            if (self.replan_mode == "STAGING" and self.replan_candidate is not None
+                    and (self.replan_stage_sent_at is None or
+                         now - self.replan_stage_sent_at >= REPLAN_STAGE_RETRY_S)):
                 self.stage_pub.publish(String(data=json.dumps({
                     "plan_id": self.replan_id,
                     "metadata": self.replan_candidate.metadata},
                     separators=(",", ":"), allow_nan=False)))
+                self.replan_stage_sent_at = now
             elif self.replan_mode == "COMMITTING":
                 self.commit_pub.publish(String(data=json.dumps({
                     "plan_id": self.replan_id}, separators=(",", ":"))))
@@ -701,7 +708,12 @@ class Safety:
             # During a path transaction, motion is held regardless of old-path
             # clearance; only an APPLIED acknowledgement releases the hold.
             if not self.test_clear:
-                self.update_replan(now, state, reason, pose, info, objects)
+                try:
+                    self.update_replan(now, state, reason, pose, info, objects)
+                except Exception as exc:
+                    self.replan_mode = "FAILED"
+                    self.replan_error = "REPLAN_EXCEPTION"
+                    rospy.logerr_throttle(2, "Replanning state transition failed: %s", exc)
                 if self.replan_mode in ("PLANNING", "STAGING", "COMMITTING", "FAILED"):
                     state, cap, reason = "STOP", 0., "REPLAN_HOLD"
             # One message atomically couples policy to its speed ceiling.

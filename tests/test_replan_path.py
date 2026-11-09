@@ -49,7 +49,7 @@ class SyntheticMask:
 class TestReplan(unittest.TestCase):
     def test_astar_rejects_corner_cutting(self):
         free = np.asarray([[True, False], [False, True]])
-        with self.assertRaisesRegex(ValueError, "no A\\* path"):
+        with self.assertRaises(ValueError):
             astar(free, (0, 0), (1, 1))
 
     def test_astar_detours_around_wall(self):

@@ -10,7 +10,7 @@ from scipy import ndimage
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 from ff_pid_core import Route
 from replan_path import (astar, checked_path, footprint_free, replan,
-                         static_boxes)
+                         static_boxes, OBSTACLE_RADIUS_M)
 
 
 class SyntheticMask:
@@ -47,6 +47,9 @@ class SyntheticMask:
 
 
 class TestReplan(unittest.TestCase):
+    def test_obstacle_radius_retry_sequence(self):
+        self.assertEqual(OBSTACLE_RADIUS_M, (0.50, 0.60, 0.70))
+
     def test_astar_rejects_corner_cutting(self):
         free = np.asarray([[True, False], [False, True]])
         with self.assertRaises(ValueError):

@@ -1,43 +1,73 @@
 # UNICON Wheelchair — FF–PD + Safety 터미널 운용 매뉴얼
 
 ROS1 Noetic 기반 전동휠체어의 **READY(센서·정합 준비) → DRIVE(자율주행) → DRIVE STOP(주행 종료) → READY STOP(전체 종료)** 운용 가이드입니다.
-이 README는 **NUC 터미널 조작 기준**입니다. Android 앱·Bluetooth 연동 안내는 앱 저장소에서 별도로 관리합니다.
+이 README의 실행 명령은 **NUC 터미널 기준**입니다. 현장에서는 노트북에서 NUC에 SSH로 접속한 뒤 동일하게 실행할 수 있습니다. Android 앱·Bluetooth 세부 사용법은 앱 저장소에서 별도로 관리합니다.
 
-> **중요 — NUC 배포 확인:** 이 저장소는 전체 팀 프로젝트의 `pid` 패키지를 별도로 관리하는 개인 저장소입니다. 지도·측위·인지·구동부 등이 포함된 **NUC 전체 배포**가 필요하며, 이 GitHub `main`을 갱신해도 NUC 파일은 자동으로 바뀌지 않습니다. 아래 명령은 최신 PID 코드를 실제 NUC 배포본에 동기화한 후 실행하세요.
+> **중요 — NUC 배포:** 개인 저장소의 `scripts/`는 팀 저장소 `src/pid/scripts/`로 동기화된 뒤 NUC에 전체 배포됩니다. 개인 GitHub `main`의 변경만으로 NUC 실행 코드가 갱신되지는 않습니다. 아래 명령은 **2026-11-09 실제 배포 확인된 고정 링크** `~/wheelchair_deploys/ffpid`를 사용합니다. 링크 대상의 변경은 READY·DRIVE 종료 및 새 배포본 검증 후에만 수행하세요.
 
 ## 0. 가장 먼저 보는 명령어 (Quick Start)
 
-**배포 예정 위치:** `~/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/`
+**2026-11-09 NUC 배포 확인값**
 
-기존 NUC 배포 디렉터리 **그대로 최신 PID 파일을 덮어 배포하는 것을 전제**로, 아래 모든 명령은 경로 설정 없이 **각 줄을 복사해 바로 실행할 수 있도록** 작성했습니다. 별도의 `P`, `D`, `cd` 명령은 필요하지 않습니다.
+| 항목 | 실제 설정 |
+|---|---|
+| 주행 코드 원본 | 팀 `Dannythechampion/UNICON_wheelchair_v2`의 `feature/ffpid`, 커밋 `78cbef8` |
+| 고정 운용 경로 | `/home/mprp3/wheelchair_deploys/ffpid` (심볼릭 링크) |
+| 현재 링크 대상 | `/home/mprp3/wheelchair_deploys/ffpid-78cbef8-20261109` |
+| 주행 스크립트 | `~/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/` |
+| 6개 경로 JSON | `~/wheelchair_deploys/ffpid/source-linux/routes/route2_manual_20261031/` |
+| ROS 작업 공간 | `~/wheelchair_deploys/ffpid/ws/` |
+| 별도 Bluetooth 브릿지 | `~/ffpid_bt_bridge/start.sh` · `unicon-ffpid-bt.service` |
+| 배포 검증 | ROS 빌드 성공, 테스트 **803 통과·4 실패·1 스킵** → `MANUAL_TEST_EXCEPTION` 수동 예외 기록. 자동 테스트 전체 통과 아님 |
 
-> **아직 최신 코드 배포 전:** 디렉터리 이름에 남아 있는 `aadc8d1`은 과거 배포 식별자입니다. GitHub의 최신 `main`을 위 디렉터리에 실제 반영하기 전에는 기존 코드가 실행됩니다.
+이하의 모든 실행 명령은 **고정 경로 `ffpid`**를 사용합니다. 다음 버전을 배포해도 각 명령의 날짜/커밋/경로를 고칠 필요는 없습니다. 단, 링크 대상은 운영자가 검증 후 수동 전환해야 합니다.
+
+**노트북에서 NUC로 접속**
+
+```bash
+# 노트북 터미널에서 실행: NUC와 네트워크 접속이 가능한 상태여야 함
+ssh mprp3@<NUC_IP>
+
+# NUC 호스트명 'mprp3'가 실제로 해석되는 환경이라면
+# ssh mprp3@mprp3
+```
+
+SSH 로그인 후에는 아래 READY·DRIVE 명령을 **NUC 셸 안에서** 실행하세요. 노트북의 `~/ws/wheelchair_ws` 경로를 사용하지 않습니다. 주행 중에는 SSH/DRIVE 세션을 유지하고, 실제 정지는 별도 터미널의 STOP과 물리적 정지 수단으로 관리하세요. SSH 연결은 비상정지 장치가 아닙니다.
+
+**현재 NUC의 고정 경로와 브릿지 상태 확인(조회 전용)**
+
+```bash
+readlink -f "$HOME/wheelchair_deploys/ffpid"
+git -C "$HOME/wheelchair_deploys/ffpid/source-linux" log -1 --oneline
+systemctl is-enabled unicon-ffpid-bt.service
+systemctl is-active unicon-ffpid-bt.service
+```
 
 **기본 운용 순서**
 
 ```bash
 # ① READY: 센서·GICP 정합·인지·구동부 준비
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" start
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready.sh" start
 
 # ② DRIVE: 선택 경로 주행 (READY 이후)
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" A_to_D5
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_drive.sh" A_to_D5
 
 # ③ DRIVE STOP: 별도 터미널에서 실행 (READY는 계속 유지)
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_stop.sh"
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_stop.sh"
 
 # ④ READY STOP: 주행 종료 후 전체 센서·정합·녹화 종료
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" stop
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready.sh" stop
 ```
 
 **상태 모니터링 — 필요한 터미널에서 각각 실행**
 
 ```bash
 # ⑤ READY: 최초 상태와 장애·복구·모드 변화만 출력
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" watch
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready.sh" watch
 
 # ⑥ Safety: CLEAR / SLOW / STOP 또는 reason이 바뀔 때만 출력
 source /opt/ros/noetic/setup.bash
-python3 -u "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_safety_watch.py"
+python3 -u "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_safety_watch.py"
 ```
 
 - `READY watch`는 상태 확인용입니다. READY를 **새로 실행하지 않습니다**.
@@ -49,7 +79,7 @@ python3 -u "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid
 **상태를 한 번만 확인할 때**
 
 ```bash
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" status
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready.sh" status
 source /opt/ros/noetic/setup.bash
 rostopic echo -n1 /pid_safety/status
 ```
@@ -135,10 +165,10 @@ D5_to_A    D5_to_D4
 
 ```bash
 # 경로 이름 직접 지정
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" D4_to_D5
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_drive.sh" D4_to_D5
 
 # 인자 없이 실행하면 터미널에서 경로 번호 1~6 선택
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh"
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_drive.sh"
 ```
 
 터미널 인자 없이 경로를 선택하려면 대화형 터미널이 필요합니다.
@@ -171,7 +201,7 @@ bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scrip
 직접 위치만 조회할 때는 다음 명령을 사용합니다(주행하지 않음).
 
 ```bash
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_drive.sh" position
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_drive.sh" position
 ```
 
 ## 3. 이벤트 기반 모니터링
@@ -179,7 +209,7 @@ bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scrip
 ### READY 이벤트
 
 ```bash
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready.sh" watch
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready.sh" watch
 ```
 
 정상 상태에서는 반복 메시지가 없고, 장치 이상·복구, GICP TRACKING 변화, MANUAL/AUTO 전환, ROS bag 중단·재개, 객체 인식·소멸 등에 대해 이벤트를 출력합니다. `Ctrl+C`로 종료해도 READY는 계속 실행됩니다.
@@ -188,7 +218,7 @@ bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scrip
 
 ```bash
 source /opt/ros/noetic/setup.bash
-python3 -u "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_safety_watch.py"
+python3 -u "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_safety_watch.py"
 ```
 
 `pid_safety.py`가 발행하는 `/pid_safety/status`를 구독하지만, 10Hz 메시지를 전부 출력하지 않고 **최초 상태 및 `(state, reason, route)` 변화 시에만** 출력합니다. 수신이 약 1.5초 동안 끊기면 `NO_STATUS`를 한 번 표시하고, 복구 후 다시 최초 상태를 표시합니다.
@@ -213,6 +243,7 @@ Safety 판단의 주요 이유:
 | SLOW | `PATH_OBSTACLE` | 전방 경로 장애물 접근 |
 | SLOW | `CURVATURE_LIMIT` | 전방 경로 곡률로 감속 |
 | SLOW | `CTE_LIMIT` | 경로 횡방향 오차로 감속 |
+| SLOW | `GOAL_APPROACH` | 목적지까지 남은 경로 거리 3.0m 이내에서 속도 상한을 선형 감속(0.4m/s까지) |
 | STOP | `PATH_OBSTACLE` | 경로 전방 정지 거리 내 장애물 |
 | STOP | `VERY_CLOSE_OBJECT` | 휠체어와 너무 가까운 물체 |
 | STOP | `MASK_BOUNDARY` | 주행 가능 영역 경계 검사 실패 |
@@ -264,12 +295,14 @@ rostopic echo /ff_pid/status
 `pid_safety.py`는 FF–PD와 별도 노드로 실행되며, `/cmd_vel`을 직접 발행하지 않습니다. 현재·예측 위치, Drivable Mask, 객체 정보, 경로 진행도/CTE/곡률 및 데이터 최신성을 바탕으로 다음을 산출합니다.
 
 - `CLEAR`: 기본 속도 상한 허용
-- `SLOW`: 곡률·CTE·장애물에 따라 속도 상한 감소
+- `SLOW`: 곡률·CTE·장애물·목적지 접근 조건별 속도 상한 중 **최솟값 하나** 적용(감속 효과 곱셈·합산 없음)
 - `STOP`: 장애물 근접·영역 경계·입력 오류 등으로 속도 0 요청
 
 `/ff_pid/motion_policy`의 `state`·`speed_limit_mps`를 FF–PD 노드가 반영하고, 진단용 `/pid_safety/status`에는 같은 정책과 `reason`을 포함합니다. Safety 정책이 최신·유효하지 않으면 제어기가 진행을 허용하지 않습니다.
 
 주요 기준은 `scripts/pid_safety.py` 상단에 있습니다(전방 장애물 `STOP 1.0m`, `SLOW 2.0m`, 정책 주기 0.1초, 인지 타임아웃 1.0초 등). 이는 제어 정책의 초기 설정이며 물리적 안전 인증이나 실차 검증 결과를 의미하지 않습니다.
+
+목적지 접근 시에는 Safety가 `GOAL_APPROACH`로 **SLOW 속도 상한만 조절**하고, 최종 0속도 명령·정차 확인·`GOAL_REACHED` 처리는 `ff_pid_node.py`가 담당합니다. Mask 경계 검사에서는 현재 위치와 예측 위치를 모두 확인합니다. 실차 감속거리·정지거리 검증은 별개입니다.
 
 ### 주요 ROS 인터페이스
 
@@ -292,15 +325,15 @@ READY는 가능하면 ROS bag 녹화를 자동으로 시작합니다. 녹화 실
 
 ```bash
 # 녹화 상태와 저장 파일 확인
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" status
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.sh" status
 
 # 수동 마커 기록 — 실험 중 원하는 시점
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark START_A
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_ENTRY
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_EXIT
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.sh" mark START_A
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_ENTRY
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_EXIT
 
 # READY는 유지하고 녹화만 종료하려면
-bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scripts/pid_ready_bag.sh" stop
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.sh" stop
 ```
 
 녹화에는 `/fast_lio_icp/pose`, `/Odometry`, `/wheel_status`, `/cmd_vel`, `/ff_pid/status`, **`/ff_pid/motion_policy`, `/pid_safety/status`**, `/perception/objects_summary`, `/manual_mark` 등이 포함됩니다.
@@ -325,7 +358,9 @@ bash "$HOME/wheelchair_deploys/ffpid-aadc8d1-20261106/source-linux/src/pid/scrip
 
 **개인 저장소**에는 `scripts/`, `waypoints/`가 있습니다. **NUC 팀 전체 배포**에서는 보통 `source-linux/src/pid/scripts/`에서 PID 스크립트를 사용하며, 지도·경로의 실제 자산은 전체 배포 구조에 의존합니다.
 
-2026-11-06에 사용한 NUC 배포 예시는 `~/wheelchair_deploys/ffpid-aadc8d1-20261106`였습니다. 이 이름과 당시 커밋 `aadc8d1`은 **과거 배포 식별자**이지, 현재 GitHub `main`의 최신 FF–PD·Safety 코드가 NUC에 설치돼 있다는 뜻이 아닙니다. READY/DRIVE 스크립트와 도우미·경로 자산이 **같은 최신 배포본**을 바라보는지 확인해야 합니다.
+**현재 운영 경로:** NUC의 `~/wheelchair_deploys/ffpid`는 `ffpid-78cbef8-20261109`를 가리키며, 해당 전체 팀 배포의 `source-linux/src/pid/scripts/`에는 개인 PID `main`의 `fd84eee` 변경 사항(목적지 감속·현재/예측 마스크 검사)이 반영되어 있습니다. 향후 GitHub 변경은 NUC에 자동 배포되지 않습니다. 배포 변경 시에는 새 폴더를 빌드·점검하고 `ffpid` 링크를 바꾸고, 브릿지 `sudo systemctl restart unicon-ffpid-bt.service`로 새 경로를 다시 인식시켜야 합니다. 기존 DWA `current` 배포 경로는 변경하지 않습니다.
+
+**Bluetooth 운영:** 개인 브릿지는 `/home/mprp3/ffpid_bt_bridge/pid_bt_bridge.py`를 별도 `unicon-ffpid-bt.service`로 자동 실행하며, `--pid-scripts`와 `--routes-dir`는 위 `ffpid` 고정 경로를 참조합니다. 기존 DWA의 `ros1_bluetooth_bridge.py`는 변경하지 않습니다. READY 시작 전 `ROS not yet online` 로그는 ROS Master 미실행으로 예상될 수 있습니다. 앱↔NUC 실기 Bluetooth 연동은 아직 확인되지 않았습니다.
 
 ## 7. 문제 발생 시
 

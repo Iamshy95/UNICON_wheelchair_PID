@@ -296,6 +296,84 @@ class FFNode:
         _, _, yaw = tft.euler_from_matrix(matrix)
         return float(matrix[0, 3]), float(matrix[1, 3]), float(yaw)
 
+    def send_replan_ack(self, plan_id, phase, ok=True, reason=""):
+        self.replan_ack.publish(String(data=json.dumps({
+            "plan_id": plan_id, "phase": phase, "ok": bool(ok),
+            "reason": reason, "route": self.route_name,
+            "route_version": self.route_version}, separators=(",", ":"))))
+
+    def on_replan_stage(self, msg):
+        try:
+            data = json.loads(msg.data)
+            if not isinstance(data, dict):
+                return
+            plan_id, meta = data["plan_id"], data["metadata"]
+            if not isinstance(plan_id, str) or not plan_id or len(plan_id) > 90:
+                return
+            if not isinstance(meta, dict) or meta.get("route_key") != self.route_name:
+                raise ValueError("wrong route")
+            if meta.get("frame") != "map" or meta.get("reference_point") != "chair_centre":
+                raise ValueError("wrong coordinate frame")
+            if meta.get("source") != "runtime_static_astar":
+                raise ValueError("wrong route provenance")
+            if meta.get("body_frame_profile") != self.route.metadata.get("body_frame_profile"):
+                raise ValueError("body frame mismatch")
+            if meta.get("chair_centre_in_body_xyz") != self.route.metadata.get("chair_centre_in_body_xyz"):
+                raise ValueError("chair reference mismatch")
+            if len(meta.get("waypoints", [])) > 10000:
+                raise ValueError("route too long")
+            route = Route(meta)
+            if (not self.mask.contains_many(route.xy).all() or
+                    not self.mask.paths_are_contained([route.xy]).all()):
+                raise ValueError("route outside authorized drivable mask")
+            if (self.mask.clearance_many(route.xy) < 0.30 - 1e-9).any():
+                raise ValueError("insufficient boundary clearance")
+            with self.lock:
+                if self.route_version == plan_id:
+                    self.send_replan_ack(plan_id, "APPLIED")
+                    return
+                if (self.motion_policy != "STOP" or self.enabled or
+                        not self.obstacle_stopped or self.external_hold or
+                        self.wheel_pair is None or self.wheel_received is None or
+                        rospy.Time.now().to_sec() - self.wheel_received > self.max_wheel_age or
+                        max(abs(v) for v in self.wheel_pair) > self.stopped_wheel_threshold):
+                    self.send_replan_ack(plan_id, "PREPARED", False, "not safely stopped")
+                    return
+                self.pending_replan = (plan_id, route)
+                self.send_replan_ack(plan_id, "PREPARED")
+        except (TypeError, ValueError, KeyError, OverflowError) as exc:
+            rospy.logwarn_throttle(2, "Invalid replan stage: %s", exc)
+
+    def on_replan_commit(self, msg):
+        try:
+            data = json.loads(msg.data)
+            plan_id = data["plan_id"]
+            if not isinstance(plan_id, str):
+                return
+            with self.lock:
+                if self.route_version == plan_id:
+                    self.send_replan_ack(plan_id, "APPLIED")
+                    return
+                if (self.pending_replan is None or self.pending_replan[0] != plan_id or
+                        self.motion_policy != "STOP" or self.enabled or
+                        not self.obstacle_stopped or self.external_hold or
+                        self.wheel_pair is None or self.wheel_received is None or
+                        rospy.Time.now().to_sec() - self.wheel_received > self.max_wheel_age or
+                        max(abs(v) for v in self.wheel_pair) > self.stopped_wheel_threshold):
+                    self.send_replan_ack(plan_id, "APPLIED", False, "commit hold not satisfied")
+                    return
+                self.route = self.pending_replan[1]
+                self.core.route = self.route
+                self.core.reset()
+                self.last_tick = None
+                self.route_version = plan_id
+                self.pending_replan = None
+                self.stop()
+                self.send_replan_ack(plan_id, "APPLIED")
+                self.publish_status("REPLAN_APPLIED")
+        except (ValueError, TypeError, KeyError) as exc:
+            rospy.logwarn_throttle(2, "Invalid replan commit: %s", exc)
+
     def on_motion_policy(self, msg):
         """Receive the atomic safety state + speed ceiling; ROS never enters Core."""
         now = rospy.Time.now().to_sec()

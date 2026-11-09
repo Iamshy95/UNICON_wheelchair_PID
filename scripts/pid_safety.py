@@ -638,7 +638,7 @@ class Safety:
             if closest is None or distance < closest:
                 closest, closest_id = distance, item.get("id")
             moving_away = (item.get("motion") == "moving"
-                           and self.receding_tracks.receding(item.get("id"), stamp))
+                           and self.receding_tracks.receding(item.get("id"), stamp, now=now))
             item_cap, item_stop, item_reason = obstacle_restriction(
                 distance, item.get("motion"), moving_away,
                 MAX_SPEED_MPS, OBSTACLE_SLOW_MIN_MPS)

@@ -497,7 +497,7 @@ class Safety:
                     if self.replan_candidate is None:
                         return
                     self.route = self.replan_candidate
-                    self.station = None
+                    self.station = 0.0
                     self.route_version = self.replan_id
                     self.replan_mode = "ACTIVE"
                     self.replan_candidate = None

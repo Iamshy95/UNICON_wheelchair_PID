@@ -135,7 +135,8 @@ done
 [[ "$ready" == 1 ]] || { bash "$STOP" >/dev/null 2>&1 || true; fail "FF-PD 노드 시작 실패. 로그: $LOG"; }
 
 REPLAN_ENABLED=false
-if [[ "${PID_ENABLE_ASTAR:-false}" == "true" && "$TEST_CLEAR" != "true" ]]; then
+# A* is enabled for normal DRIVE by default; set PID_ENABLE_ASTAR=false to disable.
+if [[ "${PID_ENABLE_ASTAR:-true}" == "true" && "$TEST_CLEAR" != "true" ]]; then
   REPLAN_ENABLED=true
   printf '[WARN] Experimental autonomous A* detour enabled. Unvalidated on real wheelchair.\n' >&2
 fi

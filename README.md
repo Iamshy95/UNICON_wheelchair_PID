@@ -377,3 +377,20 @@ bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.
 | NUC가 최신 기능을 모름 | 사용 중인 배포 디렉터리가 최신 GitHub PID 코드와 동기화됐는지 확인 |
 
 **검증 범위:** READY 장치 초기화 및 일부 통합 검사는 이전 NUC 배포에서 수행했지만, 이후 변경된 FF–PD + Safety + 출발 위치 검사 전체에 대한 **실차 통합 검증은 완료되지 않았습니다**. 소프트웨어 감시·정지 기능은 실제 휠체어의 물리적 정지 수단을 대체하지 않습니다.
+
+## 실험 기능: 정적 장애물 A* 우회 (feature/static-obstacle-astar-replan)
+
+> **개발 브랜치 전용, 실차 검증 전. 기본값 OFF.** 개인 저장소 브랜치의 코드를 수정해도 팀 배포나 NUC에는 반영되지 않습니다. 장애물 팽창 반경·곡선 추종 가능성·응답 시간은 실차로 검증되지 않았으며, 탑승자 없이 감독 하에만 시험해야 합니다. 원본 6개 JSON은 수정하지 않습니다.
+
+- 초기 설정: `PID_ENABLE_ASTAR=false` (기본값). 실험 시에만 **DRIVE를 시작하는 동일한 셸에서** `export PID_ENABLE_ASTAR=true`로 설정합니다. `_test_clear:=true`로 실행하면 자동 우회는 무조건 비활성화됩니다.
+- DRIVE는 기존 FF–PD와 Safety 외에 `pid_astar_planner.py`를 실행합니다. STOP은 3개 노드를 함께 종료하며 READY 센서/로컬라이제이션은 유지합니다.
+- Safety가 `PATH_OBSTACLE`로 정지시키고, 실제 바퀴가 멈췄으며, 해당 인식 객체가 이미 `static`이면 **추가 대기 없이** A* 탐색을 요청합니다. `moving`과 `unknown`은 A* 지도에서 제외하지만 Safety에는 계속 반영됩니다.
+- 플래너는 원래 10cm 마스크에 정적 AABB 장애물을 팽창(현재 **임시 설정** 0.70 → 0.80 → 0.90m)해 8방향 A*를 실행하고, Line-of-Sight 꺾임 제거 → 5차 B-Spline 시도 → 10cm Waypoint 및 Yaw 재생성 → 기존 경로 후방 합류를 수행합니다.
+- Safety는 최종 경로 전체의 마스크 여유와 정적 장애물 충돌을 재검증합니다. 실패하거나 시간 초과라면 `STOP`을 유지합니다.
+- `/ff_pid/replan/request` → `/ff_pid/replan/candidate` → `/ff_pid/replan/stage` → `/ff_pid/replan/ack`(PREPARED) → `/ff_pid/replan/commit` → ACK(APPLIED) 순서입니다. ACK 전까지 `REPLAN_HOLD` 정책으로 정지합니다.
+- Safety와 FF–PD가 동일한 `route_version`을 사용해야만 CLEAR/SLOW 주행이 허용됩니다. 성공한 경로는 **메모리에서만 교체**합니다. 새 경로 좌표는 `/ff_pid/active_route`에 `type: route` 형태로 발행하지만, **개인 Android Bluetooth 브릿지의 자동 전달은 아직 구현하지 않았습니다.**
+- 탐색/준비 중 기존 경로의 장애물이 해소되면 후보를 폐기하고 기존 경로를 재개합니다. 이미 COMMIT 단계에 진입했으면 두 경로 버전이 엇갈리지 않도록 적용 절차를 마칩니다.
+- 첫 우회 후 추가 우회는 이번 MVP에서 지원하지 않습니다. 새 경로에 또 장애물이 생기면 기존 Safety가 STOP을 명령합니다. 시작 방향·곡률 가용성에 대한 추가 경로 검증도 MVP에 없습니다. **부드러운 수학적 곡선이 물리적으로 추종 가능한 경로라는 의미는 아닙니다.**
+
+오프라인 테스트: `python -m unittest discover -s tests -p 'test_replan_path.py' -v` (numpy 및 scipy 필요). 실차를 움직이는 통합 시험은 수행하지 않았습니다.
+

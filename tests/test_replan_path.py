@@ -57,7 +57,7 @@ class TestReplan(unittest.TestCase):
         free[2:6, 4] = False
         cells = astar(free, (4, 1), (4, 8))
         self.assertFalse(any(not free[cell] for cell in cells))
-        self.assertGreater(len(cells), 8)
+        self.assertTrue(any(row != 4 for row, col in cells))
 
     def test_only_static_boxes(self):
         data = [

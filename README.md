@@ -380,9 +380,9 @@ bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.
 
 ## 실험 기능: 정적 장애물 A* 우회 (feature/static-obstacle-astar-replan)
 
-> **실험 기능, 실차 검증 전. 기본값 OFF.** 개인 저장소 브랜치의 코드를 수정해도 팀 배포나 NUC에는 반영되지 않습니다. 장애물 팽창 반경·곡선 추종 가능성·응답 시간은 실차로 검증되지 않았으며, 탑승자 없이 감독 하에만 시험해야 합니다. 원본 6개 JSON은 수정하지 않습니다.
+> **실험 기능, 실차 검증 전. A*는 기본 ON, 동적 멀어짐 완화는 기본 OFF.** 개인 저장소 브랜치의 코드를 수정해도 팀 배포나 NUC에는 반영되지 않습니다. 장애물 팽창 반경·곡선 추종 가능성·응답 시간은 실차로 검증되지 않았으며, 탑승자 없이 감독 하에만 시험해야 합니다. 원본 6개 JSON은 수정하지 않습니다.
 
-- 기본값은 **A*와 동적 멀어짐 감속 완화 모두 OFF**입니다. DRIVE를 시작하는 동일 셸에서 A*는 `export PID_ENABLE_ASTAR=true`, 멀어짐 감속 완화는 `export PID_ENABLE_RECEDING=true`로 각각 활성화합니다. `_test_clear:=true`에서는 두 기능을 모두 끕니다. 두 변수가 모두 꺼져 있으면 기존 경로상 장애물 감속(2m→1m) 및 정지(1m 이내) 기준을 유지합니다.
+- **A*는 DRIVE에서 기본 ON**입니다. 비활성화하려면 DRIVE를 시작하는 동일 셸에서 `export PID_ENABLE_ASTAR=false`를 지정합니다. 동적 멀어짐 감속 완화는 계속 기본 OFF이며, `export PID_ENABLE_RECEDING=true`로 별도 활성화합니다. `--test-clear` 모드에서는 둘 다 꺼집니다. A*를 끄면 기존 경로상 장애물 감속(2m→1m) 및 정지(1m 이내) 기준을 유지합니다. **기본 ON이 실차 안전 검증 완료를 의미하지 않습니다.**
 - DRIVE는 우회 기능을 명시적으로 켠 경우에만 기존 FF–PD 및 Safety 외에 `pid_astar_planner.py`를 실행합니다. STOP은 3개 노드를 함께 종료하며 READY 센서/로컬라이제이션은 유지합니다.
 - **A* 활성화 시 정적 장애물**은 경로 앞쪽 **2.0m 이내**에서 `PATH_OBSTACLE`로 STOP합니다. 물리적 바퀴 정지와 `static` 판정을 확인하면 별도 고정 대기 없이 A* 요청을 시작합니다.
 - **동적 완화 활성화 시 이동 장애물**이 실제로 **휠체어로부터 지속적으로 멀어짐**을 최소 0.6초 이상 확인한 경우에만 1~2m 구간의 장애물 감속을 무시합니다. 1m 이하에서는 저속 제한(현재 0.4m/s)을 적용하며, 아주 가까운 물체(기존 `NEAR_STOP_GAP_M`)는 무조건 STOP합니다. 멀어짐을 확인하지 못한 `moving`, `unknown` 객체에는 기존 Safety 정지·감속을 그대로 적용합니다.
@@ -396,3 +396,5 @@ bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.
 
 오프라인 테스트: `python -m unittest discover -s tests -p 'test_replan_path.py' -v` 및 `python -m unittest discover -s tests -p 'test_obstacle_policy.py' -v` (numpy 및 scipy 필요). 실차를 움직이는 통합 시험은 수행하지 않았습니다.
 
+
+제자리 회전은 이 변경에 포함하지 않았습니다. 현재 구동부의 좌우 역회전 허용 및 차체 회전 중 마스크·장애물 검증이 완료되지 않았으므로, `MASK_BOUNDARY` 정지와 우회경로 재출발에서는 기존 STOP/FF–PD 동작을 유지합니다.

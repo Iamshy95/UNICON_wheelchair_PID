@@ -22,10 +22,14 @@ class StaticVoteWindow:
         self.fraction = float(fraction)
         self.history = {}
         self.last_stamp = None
+        self.latched_id = None
+        self.latch_last_seen = None
 
     def reset(self):
         self.history.clear()
         self.last_stamp = None
+        self.latched_id = None
+        self.latch_last_seen = None
 
     def add(self, stamp, observations):
         """observations: [(object_id, motion, route_gap_m), ...].
@@ -39,13 +43,21 @@ class StaticVoteWindow:
         if self.last_stamp is not None and stamp <= self.last_stamp:
             return False
         self.last_stamp = stamp
+        visible_ids = set()
         for object_id, motion, gap in observations:
             if gap is None or not math.isfinite(float(gap)) or not 0 <= gap <= STATIC_WATCH_M:
                 continue
             key = int(object_id)
+            visible_ids.add(key)
             if key not in self.history:
                 self.history[key] = deque()
             self.history[key].append((stamp, str(motion)))
+        if self.latched_id is not None:
+            if self.latched_id in visible_ids:
+                self.latch_last_seen = stamp
+            elif self.latch_last_seen is None or stamp - self.latch_last_seen > 0.6:
+                self.latched_id = None
+                self.latch_last_seen = None
         for key, samples in list(self.history.items()):
             while samples and stamp - samples[0][0] > self.window_s:
                 samples.popleft()
@@ -54,6 +66,8 @@ class StaticVoteWindow:
         return True
 
     def confirmed(self):
+        if self.latched_id is not None:
+            return self.latched_id
         if self.last_stamp is None:
             return None
         matches = []
@@ -67,4 +81,6 @@ class StaticVoteWindow:
                 matches.append((fraction, len(samples), object_id))
         if not matches:
             return None
-        return max(matches)[2]
+        self.latched_id = max(matches)[2]
+        self.latch_last_seen = self.last_stamp
+        return self.latched_id

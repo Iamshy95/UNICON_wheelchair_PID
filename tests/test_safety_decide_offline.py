@@ -89,7 +89,7 @@ def straight_route():
 
 def obj(object_id, x, motion):
     return {"id": object_id, "x": x, "y": 0., "size": [.2, .2],
-            "profile": {"bin_m": .2, "y0": -.1, "min_x": [x]},
+            "profile": {"bin_m": .2, "y0": -.1, "min_x": [x-.1]},
             "motion": motion, "band_relation": "inside"}
 
 

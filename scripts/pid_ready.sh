@@ -65,7 +65,7 @@ run_monitor() {
 # Prevent READY from sharing the private ROS session used by the connection test.
 # status/watch do not start processes, but should still report that test mode owns ROS.
 LIDAR_TEST_STATE_DIR="${PID_LIDAR_TEST_STATE_DIR:-$HOME/.local/state/pid_lidar_test}"
-if [[ -e "$LIDAR_TEST_STATE_DIR/active" ]]; then
+if [[ "$MODE" = start && -e "$LIDAR_TEST_STATE_DIR/active" ]]; then
   fail "LiDAR connection test is active or cleanup incomplete. Stop it before READY."
 fi
 

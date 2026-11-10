@@ -27,13 +27,13 @@ def main():
 
     rospy.Subscriber("/livox/lidar", rospy.AnyMsg, lambda msg: received("lidar"), queue_size=1)
     rospy.Subscriber("/livox/imu", Imu, lambda msg: received("imu"), queue_size=1)
-    rate = rospy.Rate(2)
+    rate = rospy.Rate(5)
     while not rospy.is_shutdown():
         now = time.monotonic()
         payload = {"state": "RUNNING", "timestamp": time.time()}
         for name in ("lidar", "imu"):
             age = None if last[name] is None else now - last[name]
-            ok = age is not None and age <= 2.0
+            ok = age is not None and age <= 1.0
             if previously_ok[name] and not ok:
                 losses[name] += 1
             previously_ok[name] = ok

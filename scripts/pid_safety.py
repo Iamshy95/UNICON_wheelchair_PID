@@ -24,7 +24,9 @@ from std_msgs.msg import String, Int16MultiArray
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ff_pid_core import Route, CTE_DEADZONE_M as CONTROL_CTE_DEADZONE_M
 from ff_pid_core import MAX_V_MPS as CONTROL_MAX_V_MPS
-from replan_path import checked_path, static_boxes, OBSTACLE_RADIUS_M, MASK_RESERVE_M
+from replan_path import checked_path, OBSTACLE_RADIUS_M, MASK_RESERVE_M
+from pid_occupancy_geometry import OccupiedCells
+from pid_static_window import StaticVoteWindow, STATIC_WATCH_M
 from receding_motion import RecedingTracks
 from obstacle_policy import obstacle_restriction
 
@@ -109,11 +111,16 @@ def footprint_gap(box):
 def object_samples(item, box):
     """Chair-frame points from bounding rectangle and optional LiDAR profile."""
     x, y, dx, dy = box
-    samples = [(x + i * dx / 2, y + j * dy / 2)
-               for i in (-1, 0, 1) for j in (-1, 0, 1)]
     profile = item.get("profile")
     if profile is None:
-        return samples
+        # Geometric detections must never manufacture AABB collision points.
+        # Legacy/learned-only detectors do not supply a geometric profile;
+        # preserve their conservative fallback until a new geometry source exists.
+        if item.get("source") == "geometric" or item.get("source") == "geometric+learned":
+            return None
+        return [(x + i * dx / 2, y + j * dy / 2)
+                for i in (-1, 0, 1) for j in (-1, 0, 1)]
+    samples = []
     try:
         step = float(profile["bin_m"])
         start = float(profile["y0"])
@@ -133,11 +140,11 @@ def object_samples(item, box):
         return None
 
 
-def path_gap(route, station, chair_pose, samples, corridor_half):
+def path_gap(route, station, chair_pose, samples, corridor_half, horizon_m=FRONT_SLOW_M):
     """Nearest along-route object distance, projected onto forward route segments."""
     if not samples:
         return None
-    end = min(route.length, station + FRONT_SLOW_M + CHAIR_FRONT_M + 1.0)
+    end = min(route.length, station + horizon_m + CHAIR_FRONT_M + 1.0)
     if end - station < 1e-6:
         return None
     stations = np.r_[station, route.s[(route.s > station) & (route.s < end)], end]
@@ -247,6 +254,9 @@ class Safety:
         self.predicted_cte, self.predicted_pose, self.predicted_at = None, None, None
         self.objects, self.objects_at = None, None
         self.receding_tracks = RecedingTracks()
+        self.static_votes = StaticVoteWindow()
+        self.replan_clear_since = None
+        self.replan_occupancy = None
         self.station = None
         self.route_version = "original"
         self.controller_ever_running = False
@@ -402,6 +412,8 @@ class Safety:
         self.replan_pose = None
         self.replan_started = None
         self.replan_error = None
+        self.replan_clear_since = None
+        self.replan_occupancy = None
 
     def begin_replan(self, now, pose, info, objects):
         if not self.controller_ever_running or not self.wheels_stopped(now):
@@ -409,10 +421,14 @@ class Safety:
         if not isinstance(objects, dict) or objects.get("status") != "OK":
             return False
         obstacle_id = info.get("obstacle_id")
-        blocking = any(
-            isinstance(obj, dict) and obj.get("id") == obstacle_id and
-            obj.get("motion") == "static" and obj.get("band_relation") != "outside"
-            for obj in objects.get("objects", []))
+        # Triggered by multi-observation 5 m static vote, not the latest
+        # single-frame motion label. The occupancy worker requires this ID.
+        confirmed_id = self.static_votes.confirmed()
+        blocking = (confirmed_id is not None and obstacle_id == confirmed_id
+                    and any(isinstance(obj, dict)
+                            and obj.get("id") == obstacle_id
+                            and obj.get("band_relation") != "outside"
+                            for obj in objects.get("objects", [])))
         if not blocking:
             return False
         self.replan_id = uuid.uuid4().hex
@@ -425,6 +441,7 @@ class Safety:
         self.request_pub.publish(String(data=json.dumps({
             "plan_id": self.replan_id, "route": self.route_name,
             "pose": list(pose), "station": float(self.station),
+            "blocker_id": obstacle_id,
             "objects": objects["objects"]}, separators=(",", ":"), allow_nan=False)))
         rospy.loginfo("Safety requested static detour for obstacle %s", obstacle_id)
         return True
@@ -469,16 +486,19 @@ class Safety:
                     raise ValueError("wrong start or final goal")
                 if not any(
                         isinstance(obj, dict) and obj.get("id") == self.replan_obstacle_id
-                        and obj.get("motion") == "static"
                         for obj in self.objects["objects"]):
-                    self.cancel_replan()
+                    self.replan_mode, self.replan_error = "FAILED", "BLOCKER_NOT_OBSERVED"
                     return
-                boxes = static_boxes(self.objects["objects"])
-                if not checked_path(self.mask, route.xy, pose, boxes,
+                occupied = OccupiedCells(data["occupancy"])
+                if not occupied.has_id(self.replan_obstacle_id):
+                    raise ValueError("planning blocker absent from occupancy")
+                # Planner and Safety validate against the EXACT SAME cells.
+                if not checked_path(self.mask, route.xy, pose, occupied,
                                     OBSTACLE_RADIUS_M[0], MASK_RESERVE_M):
                     raise ValueError("candidate fails current Safety collision validation")
                 # Safety never changes active path before FF-PD acknowledges commit.
                 self.replan_candidate = route
+                self.replan_occupancy = data["occupancy"]
                 self.replan_mode = "STAGING"
                 self.replan_started = now
                 self.replan_stage_sent_at = None
@@ -526,10 +546,20 @@ class Safety:
         if not self.enable_replan or self.route_version != "original":
             return
         if self.replan_mode in ("PLANNING", "STAGING", "FAILED"):
-            # If the original route becomes clear, discard the detour instead.
-            if state in ("CLEAR", "SLOW"):
-                self.cancel_replan()
-                return
+            # Only a consistently CLEAR original route permits cancellation.
+            # Never cancel on one moving/static flip or a SLOW sample.
+            fresh = (isinstance(objects, dict) and objects.get("status") == "OK"
+                     and objects.get("frame") == "chair_centre"
+                     and objects.get("stamp") is not None
+                     and now - float(objects["stamp"]) <= OBSTACLE_TIMEOUT_S)
+            if state == "CLEAR" and fresh and info.get("obstacle_distance_m") is None:
+                if self.replan_clear_since is None:
+                    self.replan_clear_since = now
+                if now - self.replan_clear_since >= 0.6:
+                    self.cancel_replan()
+                    return
+            else:
+                self.replan_clear_since = None
         if self.replan_mode in ("PLANNING", "STAGING", "COMMITTING"):
             if (self.replan_started is None or
                     now - self.replan_started > (
@@ -548,10 +578,12 @@ class Safety:
             elif self.replan_mode == "COMMITTING":
                 self.commit_pub.publish(String(data=json.dumps({
                     "plan_id": self.replan_id}, separators=(",", ":"))))
-        if (self.replan_mode == "IDLE" and state == "STOP" and
-                reason == "PATH_OBSTACLE" and pose is not None and
-                self.station is not None):
-            self.begin_replan(now, pose, info, objects)
+        if (self.replan_mode == "IDLE" and state == "STOP"
+                and pose is not None and self.station is not None):
+            confirmed_id = self.static_votes.confirmed()
+            if confirmed_id is not None:
+                request_info = dict(info, obstacle_id=confirmed_id)
+                self.begin_replan(now, pose, request_info, objects)
 
     def decide(self, now, pose, predicted_pose, predicted_cte, objects, received):
         """Return raw policy with diagnostics. Any untrusted input fails closed."""
@@ -613,6 +645,8 @@ class Safety:
         info["curve_limit_mps"] = curve_cap
         info["preview_curvature_inv_m"] = curvature
         closest, closest_id, near_gap = None, None, None
+        early_observations = []
+        early_profile_gaps = {}
         obstacle_cap = MAX_SPEED_MPS
         cap_reason = None
         stopped_distance, stopped_id = None, None
@@ -634,11 +668,28 @@ class Safety:
             # 'crossing', 'inside' and 'unavailable' remain checked.
             if item.get("band_relation") == "outside":
                 continue
-            gap = footprint_gap(box)
-            if near_gap is None or gap < near_gap:
-                near_gap = gap
-            if gap < NEAR_STOP_GAP_M:
-                info.update(near_gap_m=gap, obstacle_id=item.get("id"))
+            # Profile is the actual front surface; AABB is retained for
+            # tracking, RViz and legacy-only missing-profile fallback.
+            if item.get("profile") is not None:
+                near_gap_for_obj = min(
+                    math.hypot(max(0., sx - CHAIR_FRONT_M,
+                                   -CHAIR_REAR_M - sx),
+                               max(0., abs(sy) - 0.10 - CHAIR_HALF_WIDTH_M))
+                    for sx, sy in samples) if samples else None
+            else:
+                near_gap_for_obj = footprint_gap(box)
+            if near_gap_for_obj is not None:
+                near_gap = near_gap_for_obj if near_gap is None else min(near_gap, near_gap_for_obj)
+            # Collect early 5 m path evidence independently of the normal
+            # 1-2 m dynamic slowing rules.
+            early_gap = path_gap(self.route, station, pose, samples,
+                                 corridor + 0.10, STATIC_WATCH_M)
+            if early_gap is not None and early_gap <= STATIC_WATCH_M:
+                early_observations.append((item.get("id"), item.get("motion"), early_gap))
+                early_profile_gaps[item.get("id")] = early_gap
+            if near_gap_for_obj is not None and near_gap_for_obj < NEAR_STOP_GAP_M:
+                info.update(near_gap_m=near_gap_for_obj, obstacle_id=item.get("id"))
+                self.static_votes.add(stamp, early_observations)
                 return "STOP", 0., "VERY_CLOSE_OBJECT", info
             distance = path_gap(self.route, station, pose, samples, corridor)
             if distance is None:
@@ -650,7 +701,7 @@ class Safety:
             item_cap, item_stop, item_reason = obstacle_restriction(
                 distance, item.get("motion"), moving_away,
                 MAX_SPEED_MPS, OBSTACLE_SLOW_MIN_MPS,
-                static_detour_enabled=self.enable_replan,
+                static_detour_enabled=False,  # 5 m multi-frame static vote owns A* STOP
                 receding_enabled=self.enable_receding)
             if item_reason == "RECEDING_IGNORED":
                 receding_ignored.append(item.get("id"))
@@ -660,6 +711,9 @@ class Safety:
                 stopped_distance, stopped_id = distance, item.get("id")
             if item_cap < obstacle_cap:
                 obstacle_cap, cap_reason = item_cap, item_reason
+        if self.enable_replan:
+            self.static_votes.add(stamp, early_observations)
+        info["static_candidate_id"] = self.static_votes.confirmed() if self.enable_replan else None
         info["near_gap_m"] = near_gap
         info["obstacle_distance_m"] = closest
         info["obstacle_id"] = stopped_id if stopped_id is not None else closest_id
@@ -668,6 +722,10 @@ class Safety:
         info["receding_near_slow_ids"] = receding_near
         if stopped_distance is not None:
             return "STOP", 0., "PATH_OBSTACLE", info
+        if self.enable_replan and info["static_candidate_id"] in early_profile_gaps:
+            info["obstacle_id"] = info["static_candidate_id"]
+            info["obstacle_distance_m"] = early_profile_gaps[info["static_candidate_id"]]
+            return "STOP", 0., "STATIC_REPLAN_EARLY", info
         cap = min(MAX_SPEED_MPS, cte_cap, curve_cap, obstacle_cap, goal_cap)
         if cap < MAX_SPEED_MPS - SLOW_THRESHOLD_MPS:
             if cap == obstacle_cap:

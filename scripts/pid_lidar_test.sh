@@ -13,6 +13,11 @@ ROS_SETUP="${ROS_SETUP:-/opt/ros/noetic/setup.bash}"
 LIVOX_WS="${LIVOX_WS:-$HOME/ws_livox}"
 MONITOR="$HERE/pid_lidar_test_monitor.py"
 export ROS_MASTER_URI="${ROS_MASTER_URI:-http://127.0.0.1:11311}"
+# Never start/stop a master on another host; this is a NUC-local test.
+case "$ROS_MASTER_URI" in
+  http://127.0.0.1:11311|http://localhost:11311) ;;
+  *) echo "[FAIL] LiDAR test requires local ROS_MASTER_URI (127.0.0.1:11311)." >&2; exit 1 ;;
+esac
 mkdir -p "$STATE_DIR"
 exec 9>"$STATE_DIR/control.lock"
 flock -x 9

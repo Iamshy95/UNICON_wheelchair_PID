@@ -642,18 +642,15 @@ class Safety:
         for item in objects["objects"]:
             if not isinstance(item, dict):
                 return "STOP", 0., "BAD_OBJECT", info
-            samples = object_samples(item)
-            if not samples:
-                # Do not infer geometric free space from a bounding box.
-                # Unknown/learned-only/malformed profiles require a stop.
-                return "STOP", 0., "BAD_OBJECT_PROFILE", info
-            # The geometric perception 'outside' label refers to the
-            # common Drivable Mask (with classification tolerance).
-            # Ignore it for both near-footprint and route obstacle decisions,
-            # regardless of static/moving/unknown motion classification.
-            # 'crossing', 'inside' and 'unavailable' remain checked.
+            # Preserve existing exclusion of objects entirely outside the
+            # common drivable mask BEFORE requiring their collision geometry.
             if item.get("band_relation") == "outside":
                 continue
+            samples = object_samples(item)
+            if not samples:
+                # Never infer obstacle geometry from a potentially giant AABB.
+                # Unknown/learned-only/malformed profiles fail closed.
+                return "STOP", 0., "BAD_OBJECT_PROFILE", info
             # Occupied lateral slices, not the potentially oversized AABB,
             # determine the nearest chair footprint gap. Half a 0.2m
             # profile bin is included as a conservative lateral allowance.

@@ -89,6 +89,7 @@ def straight_route():
 
 def obj(object_id, x, motion):
     return {"id": object_id, "x": x, "y": 0., "size": [.2, .2],
+            "profile": {"bin_m": .2, "y0": -.1, "min_x": [x]},
             "motion": motion, "band_relation": "inside"}
 
 
@@ -146,6 +147,23 @@ class ActualSafetyAggregation(unittest.TestCase):
         ], astar=True, receding=True, moving_away=True)
         self.assertEqual((state, cap, reason), ("STOP", 0., "PATH_OBSTACLE"))
         self.assertEqual(info["obstacle_id"], 8)
+
+    def test_aabb_does_not_trigger_false_very_close_stop(self):
+        item = obj(7, 2.5, "moving")
+        # Fake a huge cluster bounding box covering the wheelchair;
+        # its actual profile remains 2.5m ahead.
+        item["x"] = .3
+        item["size"] = [10., 9.]
+        state, cap, reason, _ = decide([item])
+        self.assertNotEqual(reason, "VERY_CLOSE_OBJECT")
+        self.assertNotEqual(state, "STOP")
+
+    def test_missing_profile_fails_closed_without_aabb_fallback(self):
+        item = obj(7, 2.5, "moving")
+        item.pop("profile")
+        state, cap, reason, _ = decide([item])
+        self.assertEqual((state, cap, reason),
+                         ("STOP", 0., "BAD_OBJECT_PROFILE"))
 
     def test_unknown_never_exempted(self):
         state, cap, _, _ = decide([obj(7, 1.5, "unknown")],

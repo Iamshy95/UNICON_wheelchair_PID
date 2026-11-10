@@ -58,8 +58,10 @@ personal-repository-only deployment.
   implementation; the existing 0.50/0.60/0.70 m collision radii have NOT been
   augmented by a second chassis radius.
 - Profile-based Safety removes synthetic AABB sample points for geometric
-  detections. AABB is still retained in detection/tracking/RViz, and as
-  conservative fallback for legacy/learned-only detections lacking profiles.
+  detections. AABB is still retained in detection/tracking/RViz, only for
+  tracking/RViz. In the PID Safety collision/STOP logic, any in-mask
+  detection missing a usable LiDAR profile causes fail-closed STOP
+  (BAD_OBJECT_PROFILE), not an AABB-based collision decision.
 - Missing, stale, malformed occupancy: the A* worker refuses the plan; Safety
   keeps STOP. The original route assets remain immutable.
 - Normal ROS bag now includes the A* handshake topics, not just controller

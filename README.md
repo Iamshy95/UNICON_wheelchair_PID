@@ -400,3 +400,19 @@ bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.
 제자리 회전은 이 변경에 포함하지 않았습니다. 현재 구동부의 좌우 역회전 허용 및 차체 회전 중 마스크·장애물 검증이 완료되지 않았으므로, `MASK_BOUNDARY` 정지와 우회경로 재출발에서는 기존 STOP/FF–PD 동작을 유지합니다.
 
 **제자리 회전 미적용:** 마스크 경계 근접 정지 상태에서 실제 제자리 회전하려면 `v=0, w≠0` 명령이 구동부에서 양쪽 바퀴 반대 방향 회전으로 그대로 전달되어야 합니다. 팀 저장소의 과거 NUC 스냅샷 `docs/nuc_snapshot/base_model_wheel_cmd_tmp.py`에는 회전력 확보를 위해 양쪽 바퀴에 전진속도를 가하는 보정이 있으므로, 이를 수정하거나 실기에서 검증하지 않은 상태에서는 제자리 회전을 활성화하지 않습니다. 마스크 중심점 여유만으로 실제 회전하는 차체 전체의 안전을 보장하지 않습니다.
+
+
+## LiDAR 단독 연결 테스트 (READY 이전, FF–PID 주행과 무관)
+
+새로 추가된 `scripts/pid_lidar_test.sh`는 ROS Master와 MID-360 Livox 드라이버만 실행합니다. FAST-LIO·GICP·인지·모터 제어는 실행하지 않습니다. `/livox/lidar`, `/livox/imu` 실제 메시지의 최신 수신 여부와 수신 끊김 횟수를 별도의 모니터가 지속 기록합니다. **정상 수신되었다고 자동으로 종료하지 않습니다.** 연결 점검을 마친 뒤 종료하고 READY를 다시 실행하세요.
+
+```bash
+bash scripts/pid_lidar_test.sh start
+bash scripts/pid_lidar_test.sh status
+bash scripts/pid_lidar_test.sh stop
+bash scripts/pid_ready.sh start
+```
+
+상태 기록: `~/.local/state/pid_lidar_test/status.json` (환경변수 `PID_LIDAR_TEST_STATE_DIR`로 변경 가능). 각 실행 로그는 `~/pid_lidar_test_logs`에 저장합니다. 테스트가 시작한 프로세스 그룹만 종료하며, 다른 ROS Master 또는 기존 Livox 프로세스가 있으면 시작을 거부합니다. 종료가 불완전하면 READY를 차단하고 잔류 프로세스 확인을 요구합니다. 임의의 `pkill`/전체 ROS 종료는 수행하지 않습니다.
+
+앱과 NUC의 브릿지가 이 스크립트를 사용하려면 `UNICON_wheelchair_app` 저장소의 **같은 기능 브랜치**에 있는 최신 `nuc/pid_bt_bridge.py`도 배포해야 합니다. 실제 NUC에서의 구동·전원 연결 반복·ROS Master 재시작 후 구독 복구는 미검증입니다.

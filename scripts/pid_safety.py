@@ -98,28 +98,15 @@ def box_of(item):
         return None
 
 
-def footprint_gap(box):
-    """Distance from detected chair-frame AABB to chair physical rectangle."""
-    x, y, dx, dy = box
-    gx = max(0.0, x - dx / 2 - CHAIR_FRONT_M,
-             -CHAIR_REAR_M - (x + dx / 2))
-    gy = max(0.0, y - dy / 2 - CHAIR_HALF_WIDTH_M,
-             -CHAIR_HALF_WIDTH_M - (y + dy / 2))
-    return math.hypot(gx, gy)
+def object_samples(item, box=None):
+    """Return observed LiDAR profile samples only; never synthesize AABB points.
 
-
-def object_samples(item, box):
-    """Chair-frame points from bounding rectangle and optional LiDAR profile."""
-    x, y, dx, dy = box
+    Missing geometry fails closed at the caller, including learned-only detections.
+    The optional box argument is ignored for compatibility with offline callers.
+    """
     profile = item.get("profile")
     if profile is None:
-        # Geometric detections must never manufacture AABB collision points.
-        # Legacy/learned-only detectors do not supply a geometric profile;
-        # preserve their conservative fallback until a new geometry source exists.
-        if item.get("source") == "geometric" or item.get("source") == "geometric+learned":
-            return None
-        return [(x + i * dx / 2, y + j * dy / 2)
-                for i in (-1, 0, 1) for j in (-1, 0, 1)]
+        return None
     samples = []
     try:
         step = float(profile["bin_m"])
@@ -655,11 +642,10 @@ class Safety:
         for item in objects["objects"]:
             if not isinstance(item, dict):
                 return "STOP", 0., "BAD_OBJECT", info
-            box = box_of(item)
-            if box is None:
-                return "STOP", 0., "BAD_OBJECT_GEOMETRY", info
-            samples = object_samples(item, box)
-            if samples is None:
+            samples = object_samples(item)
+            if not samples:
+                # Do not infer geometric free space from a bounding box.
+                # Unknown/learned-only/malformed profiles require a stop.
                 return "STOP", 0., "BAD_OBJECT_PROFILE", info
             # The geometric perception 'outside' label refers to the
             # common Drivable Mask (with classification tolerance).
@@ -668,16 +654,15 @@ class Safety:
             # 'crossing', 'inside' and 'unavailable' remain checked.
             if item.get("band_relation") == "outside":
                 continue
-            # Profile is the actual front surface; AABB is retained for
-            # tracking, RViz and legacy-only missing-profile fallback.
-            if item.get("profile") is not None:
-                near_gap_for_obj = min(
-                    math.hypot(max(0., sx - CHAIR_FRONT_M,
-                                   -CHAIR_REAR_M - sx),
-                               max(0., abs(sy) - 0.10 - CHAIR_HALF_WIDTH_M))
-                    for sx, sy in samples) if samples else None
-            else:
-                near_gap_for_obj = footprint_gap(box)
+            # Occupied lateral slices, not the potentially oversized AABB,
+            # determine the nearest chair footprint gap. Half a 0.2m
+            # profile bin is included as a conservative lateral allowance.
+            bin_half = float(item["profile"]["bin_m"]) / 2.
+            near_gap_for_obj = min(
+                math.hypot(max(0., sx - CHAIR_FRONT_M,
+                               -CHAIR_REAR_M - sx),
+                           max(0., abs(sy) - bin_half - CHAIR_HALF_WIDTH_M))
+                for sx, sy in samples)
             if near_gap_for_obj is not None:
                 near_gap = near_gap_for_obj if near_gap is None else min(near_gap, near_gap_for_obj)
             # Collect early 5 m path evidence independently of the normal

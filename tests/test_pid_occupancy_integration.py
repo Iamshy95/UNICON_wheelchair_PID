@@ -55,6 +55,20 @@ class IntegratedAstar(unittest.TestCase):
             votes.add(101.6 + i*.2, [])
         self.assertIsNone(votes.confirmed())
 
+    def test_static_latch_survives_moving_flicker_before_wheels_stop(self):
+        v = StaticVoteWindow()
+        for i in range(8):
+            v.add(300+i*.2, [(611, "static" if i%2==0 else "moving", 3.)])
+        self.assertEqual(v.confirmed(), 611)
+        # The next observations all say moving; do not revoke the STOP plan.
+        for i in range(8, 18):
+            v.add(300+i*.2, [(611, "moving", 2.5)])
+            self.assertEqual(v.confirmed(), 611)
+        # Object is physically absent for >0.6 sec, only then clear latch.
+        for i in range(18, 24):
+            v.add(300+i*.2, [])
+        self.assertIsNone(v.confirmed())
+
     def test_only_profile_5m_and_distinct_stamps(self):
         v = StaticVoteWindow()
         for i in range(10):

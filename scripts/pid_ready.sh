@@ -62,8 +62,8 @@ run_monitor() {
   python3 -u "$MONITOR" "--$1"
 }
 
-# Prevent READY from sharing the private ROS session used by the connection test.
-# status/watch do not start processes, but should still report that test mode owns ROS.
+# Prevent READY startup while the isolated LiDAR connection test owns ROS.
+# A stale 'active' marker also blocks startup until the test is cleaned up.
 LIDAR_TEST_STATE_DIR="${PID_LIDAR_TEST_STATE_DIR:-$HOME/.local/state/pid_lidar_test}"
 if [[ "$MODE" = start && -e "$LIDAR_TEST_STATE_DIR/active" ]]; then
   fail "LiDAR connection test is active or cleanup incomplete. Stop it before READY."
@@ -227,7 +227,7 @@ msg '               UNICON PID READY'
 msg '=================================================='
 msg "Map          : $MAP_ID"
 msg "Init route   : $INIT_ROUTE"
-msg "Init method  : known-start first, global fallback"
+msg "Init method  : A/D4/D5 auto match, global fallback"
 msg "ROS master   : $ROS_MASTER_URI"
 msg "Logs         : $RUN_DIR"
 msg '--------------------------------------------------'
@@ -283,6 +283,7 @@ rosparam set /fast_lio_icp/auto_initialization_stable false
 rosparam set /fast_lio_icp/auto_initialization_source none
 start_detached localization roslaunch static_livox_localization moving_localization.launch \
   rviz:="$RVIZ" visualization:=false auto_init:=true auto_init_global_only:=false \
+  auto_init_site_routes:="${AUTO_INIT_SITE_ROUTES:-}" \
   map_path:="$MAP" map_sha256:="$MAP_SHA256" map_id:="$MAP_ID" \
   auto_init_map:="$MAP" auto_init_traj:="$TRAJ" \
   auto_init_route:="$INIT_ROUTE" \
@@ -292,7 +293,7 @@ start_detached localization roslaunch static_livox_localization moving_localizat
   auto_init_gpu_lateral_radius_m:="${AUTO_INIT_GPU_LATERAL_RADIUS_M:-10.0}" \
   auto_init_gpu_lateral_step_m:="${AUTO_INIT_GPU_LATERAL_STEP_M:-1.0}" \
   registration_backend:="$REGISTRATION_BACKEND"
-msg '[WAIT] GICP known-start initialization and stationary verification...'
+msg '[WAIT] GICP three-site initialization and stationary verification...'
 localized=false
 start_ts=$SECONDS
 while (( SECONDS - start_ts < AUTO_INIT_TIMEOUT_S )); do
@@ -301,7 +302,7 @@ while (( SECONDS - start_ts < AUTO_INIT_TIMEOUT_S )); do
   stable="$(timeout 2 rosparam get /fast_lio_icp/auto_initialization_stable 2>/dev/null || echo false)"
   source_kind="$(timeout 2 rosparam get /fast_lio_icp/auto_initialization_source 2>/dev/null || echo none)"
   if [ "$state" = TRACKING ] && [ "$verified" = true ] && [ "$stable" = true ]; then
-    case "$source_kind" in known_start_route|global_search) localized=true; break;; esac
+    case "$source_kind" in known_start_route|global_search|known_site:A|known_site:D4|known_site:D5) localized=true; break;; esac
   fi
   sleep 1
 done

@@ -33,6 +33,10 @@ class OpenMask:
         result = np.zeros(len(r), dtype=float)
         result[v] = self.clearance[r[v], c[v]]
         return result
+    def segment_is_contained(self, a, b):
+        a, b = np.asarray(a), np.asarray(b)
+        n = max(2, int(np.linalg.norm(b-a)/.02)+2)
+        return bool(np.all(self.clearance_many(np.linspace(a, b, n)) > .01))
     def paths_are_contained(self, paths):
         return np.asarray([np.all(self.clearance_many(p) > .01) for p in paths])
 

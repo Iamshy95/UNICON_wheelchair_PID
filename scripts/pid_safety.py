@@ -701,7 +701,7 @@ class Safety:
             item_cap, item_stop, item_reason = obstacle_restriction(
                 distance, item.get("motion"), moving_away,
                 MAX_SPEED_MPS, OBSTACLE_SLOW_MIN_MPS,
-                static_detour_enabled=False,  # 5 m multi-frame static vote owns A* STOP
+                static_detour_enabled=self.enable_replan,  # preserve prior 2m static STOP
                 receding_enabled=self.enable_receding)
             if item_reason == "RECEDING_IGNORED":
                 receding_ignored.append(item.get("id"))

@@ -63,6 +63,7 @@ def install_ros_import_stubs():
 
 install_ros_import_stubs()
 from ff_pid_core import Route
+from pid_static_window import StaticVoteWindow
 Safety = importlib.import_module("pid_safety").Safety
 
 
@@ -99,6 +100,7 @@ def decide(items, astar=False, receding=False, moving_away=False):
     safety.enable_replan = astar
     safety.enable_receding = receding
     safety.receding_tracks = Receding(moving_away)
+    safety.static_votes = StaticVoteWindow()
     summary = {"stamp": 100.0, "status": "OK", "frame": "chair_centre",
                "objects": items}
     return safety.decide(100.0, (0., 0., 0.), None, None, summary, 100.0)

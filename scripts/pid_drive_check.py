@@ -303,6 +303,13 @@ def watch_states(args):
             if new_state != state['drive']:
                 state['drive'] = new_state
                 print('[FF-PD] %s' % new_state, flush=True)
+                if new_state in ('GOAL_REACHED', 'MANUAL_INTERVENTION'):
+                    print(json.dumps({
+                        'type': 'drive_event', 'status': new_state,
+                        'reason': new_state, 'route': args.route,
+                        'message': ('목적지 도착 및 바퀴 정지 확인' if new_state == 'GOAL_REACHED'
+                                    else '조이스틱 수동 개입으로 자율주행 제어 중단'),
+                    }, ensure_ascii=False, separators=(',', ':')), flush=True)
             if station is not None:
                 state['station'] = station
 

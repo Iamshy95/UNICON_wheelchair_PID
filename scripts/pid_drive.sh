@@ -229,7 +229,13 @@ safe_stop_on_exit() {
   trap - EXIT INT TERM HUP
   if [[ "${ARMED:-0}" == 1 ]]; then
     printf '\n[INFO] 주행 터미널 종료: FF-PD 정지 요청\n' >&2
-    bash "$STOP" || printf '[WARN] 자동 정지 확인 실패. 실제 휠체어 정지를 확인하세요.\n' >&2
+    if bash "$STOP"; then
+      emit_drive_event STOP_VERIFIED STOP_SCRIPT_OK "MANUAL 전환과 정차 및 주행 프로세스 정리가 확인됐습니다."
+    else
+      emit_drive_event STOP_UNVERIFIED STOP_SCRIPT_FAILED "주행 정지 확인 실패: 실제 바퀴 정지와 MANUAL 모드를 확인하세요."
+      printf '[WARN] 자동 정지 확인 실패. 실제 휠체어 정지를 확인하세요.\n' >&2
+      [[ "$code" != 0 ]] || code=2
+    fi
   fi
   exit "$code"
 }

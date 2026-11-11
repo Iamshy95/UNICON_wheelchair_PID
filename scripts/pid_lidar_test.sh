@@ -120,6 +120,7 @@ PY
       fi
       printf '{"state":"STOPPED","lidar":"UNKNOWN","imu":"UNKNOWN","connection_ok":false}\n'
     fi
+    exit 0
     ;;
   stop)
     if [[ -f "$STATE_DIR/active" || -f "$STATE_DIR/master.pid" ||
@@ -128,6 +129,7 @@ PY
     else
       echo "[OK] LiDAR test is not active."
     fi
+    exit 0
     ;;
 esac
 

@@ -76,18 +76,58 @@ stop_owned() {
 }
 case "$MODE" in
   status)
+    # A cached status.json must never report a healthy LiDAR after the
+    # monitor, driver or ROS master has exited. Check process identity and
+    # snapshot freshness before trusting the last OK reading.
     if [[ -f "$STATE_DIR/active" ]]; then
-      if [[ -f "$STATE_DIR/status.json" ]]; then cat "$STATE_DIR/status.json"
-      else printf '{"state":"STARTING","lidar":"WAITING","imu":"WAITING"}\n'; fi
+      if ! owned_group monitor; then
+        printf '{"state":"FAULT","reason":"MONITOR_NOT_RUNNING","lidar":"UNKNOWN","imu":"UNKNOWN","connection_ok":false}\n'
+        exit 1
+      fi
+      if ! owned_group master || ! owned_group driver; then
+        printf '{"state":"FAULT","reason":"MASTER_OR_DRIVER_NOT_RUNNING","lidar":"UNKNOWN","imu":"UNKNOWN","connection_ok":false}\n'
+        exit 1
+      fi
+      python3 - "$STATE_DIR/status.json" <<'PY'
+import json, sys, time
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("status is not an object")
+    age = time.time() - float(data["timestamp"])
+    if not -1.0 <= age <= 3.0:
+        data.update(state="FAULT", reason="MONITOR_STATUS_STALE",
+                    lidar="STALE", imu="STALE", connection_ok=False)
+    else:
+        data["connection_ok"] = (data.get("lidar") == "OK" and
+                                  data.get("imu") == "OK" and
+                                  data.get("master") == "RUNNING" and
+                                  data.get("driver") == "RUNNING")
+        data["health"] = "OK" if data["connection_ok"] else "NOT_READY"
+    print(json.dumps(data, ensure_ascii=False, separators=(",", ":")))
+    sys.exit(1 if data["state"] == "FAULT" else 0)
+except (OSError, ValueError, TypeError, KeyError) as exc:
+    print(json.dumps(dict(state="FAULT", reason="STATUS_UNAVAILABLE",
+                          detail=str(exc), lidar="UNKNOWN", imu="UNKNOWN",
+                          connection_ok=False), ensure_ascii=False))
+    sys.exit(1)
+PY
     else
-      printf '{"state":"STOPPED","lidar":"UNKNOWN","imu":"UNKNOWN"}\n'
+      if owned_group master || owned_group driver || owned_group monitor; then
+        printf '{"state":"FAULT","reason":"ORPHANED_TEST_PROCESS","lidar":"UNKNOWN","imu":"UNKNOWN","connection_ok":false}\n'
+        exit 1
+      fi
+      printf '{"state":"STOPPED","lidar":"UNKNOWN","imu":"UNKNOWN","connection_ok":false}\n'
     fi
-    exit 0
     ;;
   stop)
-    if [[ -f "$STATE_DIR/active" ]]; then stop_owned
-    else echo "[OK] LiDAR test is not active."; fi
-    exit 0
+    if [[ -f "$STATE_DIR/active" || -f "$STATE_DIR/master.pid" ||
+          -f "$STATE_DIR/driver.pid" || -f "$STATE_DIR/monitor.pid" ]]; then
+      stop_owned
+    else
+      echo "[OK] LiDAR test is not active."
+    fi
     ;;
 esac
 
@@ -142,5 +182,6 @@ sleep 0.5
 read -r monitor_pid < "$STATE_DIR/monitor.pid"
 pid_alive "$monitor_pid" || fail "LiDAR monitor exited early; see $RUN_DIR/monitor.log"
 trap - EXIT
-echo "[OK] LiDAR test started. It runs until the operator presses Test End."
+echo "[OK] LiDAR test processes started (NOT YET proof of sensor connection)."
+echo "[INFO] Check status until connection_ok=true and lidar=OK, imu=OK."
 echo "[INFO] Run logs: $RUN_DIR"

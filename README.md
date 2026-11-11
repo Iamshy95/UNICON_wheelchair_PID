@@ -24,13 +24,15 @@ ROS1 Noetic 기반 전동휠체어의 **READY(센서·정합 준비) → DRIVE(�
 
 **노트북에서 NUC로 접속**
 
-```bash
-# 노트북 터미널에서 실행: NUC와 네트워크 접속이 가능한 상태여야 함
-ssh mprp3@<NUC_IP>
+**노트북 터미널에서 실행: NUC와 네트워크 접속이 가능한 상태여야 함**
 
-# NUC 호스트명 'mprp3'가 실제로 해석되는 환경이라면
-# ssh mprp3@mprp3
+```bash
+ssh mprp3@<NUC_IP>
 ```
+
+**NUC 호스트명 'mprp3'가 실제로 해석되는 환경이라면**
+
+**ssh mprp3@mprp3**
 
 SSH 로그인 후에는 아래 READY·DRIVE 명령을 **NUC 셸 안에서** 실행하세요. 노트북의 `~/ws/wheelchair_ws` 경로를 사용하지 않습니다. 주행 중에는 SSH/DRIVE 세션을 유지하고, 실제 정지는 별도 터미널의 STOP과 물리적 정지 수단으로 관리하세요. SSH 연결은 비상정지 장치가 아닙니다.
 
@@ -38,35 +40,61 @@ SSH 로그인 후에는 아래 READY·DRIVE 명령을 **NUC 셸 안에서** 실�
 
 ```bash
 readlink -f "$HOME/wheelchair_deploys/ffpid"
+```
+
+```bash
 git -C "$HOME/wheelchair_deploys/ffpid/source-linux" log -1 --oneline
+```
+
+```bash
 systemctl is-enabled unicon-ffpid-bt.service
+```
+
+```bash
 systemctl is-active unicon-ffpid-bt.service
 ```
 
 **기본 운용 순서**
 
+**① READY: 센서·GICP 정합·인지·구동부 준비**
+
 ```bash
-# ① READY: 센서·GICP 정합·인지·구동부 준비
 bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready.sh" start
+```
 
-# ② DRIVE: 선택 경로 주행 (READY 이후)
+**② DRIVE: 선택 경로 주행 (READY 이후)**
+
+```bash
 bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_drive.sh" A_to_D5
+```
 
-# ③ DRIVE STOP: 별도 터미널에서 실행 (READY는 계속 유지)
+**③ DRIVE STOP: 별도 터미널에서 실행 (READY는 계속 유지)**
+
+```bash
 bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_stop.sh"
+```
 
-# ④ READY STOP: 주행 종료 후 전체 센서·정합·녹화 종료
+**④ READY STOP: 주행 종료 후 전체 센서·정합·녹화 종료**
+
+```bash
 bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready.sh" stop
 ```
 
 **상태 모니터링 — 필요한 터미널에서 각각 실행**
 
-```bash
-# ⑤ READY: 최초 상태와 장애·복구·모드 변화만 출력
-bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready.sh" watch
+**⑤ READY: 최초 상태와 장애·복구·모드 변화만 출력**
 
-# ⑥ Safety: CLEAR / SLOW / STOP 또는 reason이 바뀔 때만 출력
+```bash
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready.sh" watch
+```
+
+**⑥ Safety: CLEAR / SLOW / STOP 또는 reason이 바뀔 때만 출력**
+
+```bash
 source /opt/ros/noetic/setup.bash
+```
+
+```bash
 python3 -u "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_safety_watch.py"
 ```
 
@@ -80,7 +108,13 @@ python3 -u "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_safe
 
 ```bash
 bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready.sh" status
+```
+
+```bash
 source /opt/ros/noetic/setup.bash
+```
+
+```bash
 rostopic echo -n1 /pid_safety/status
 ```
 
@@ -163,11 +197,15 @@ D4_to_A    D4_to_D5
 D5_to_A    D5_to_D4
 ```
 
-```bash
-# 경로 이름 직접 지정
-bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_drive.sh" D4_to_D5
+**경로 이름 직접 지정**
 
-# 인자 없이 실행하면 터미널에서 경로 번호 1~6 선택
+```bash
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_drive.sh" D4_to_D5
+```
+
+**인자 없이 실행하면 터미널에서 경로 번호 1~6 선택**
+
+```bash
 bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_drive.sh"
 ```
 
@@ -218,6 +256,9 @@ bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready.sh" 
 
 ```bash
 source /opt/ros/noetic/setup.bash
+```
+
+```bash
 python3 -u "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_safety_watch.py"
 ```
 
@@ -259,6 +300,9 @@ Safety 판단의 주요 이유:
 
 ```bash
 source /opt/ros/noetic/setup.bash
+```
+
+```bash
 rostopic echo /ff_pid/status
 ```
 
@@ -323,16 +367,29 @@ rostopic echo /ff_pid/status
 
 READY는 가능하면 ROS bag 녹화를 자동으로 시작합니다. 녹화 실패가 READY 자체를 항상 막지는 않으므로 확인이 필요합니다. 파일은 READY 실행 디렉터리(`~/pid_ready_logs/<실행시각>/`)에 보관하며 **512MB 또는 15분** 단위로 분할합니다.
 
+**녹화 상태와 저장 파일 확인**
+
 ```bash
-# 녹화 상태와 저장 파일 확인
 bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.sh" status
+```
 
-# 수동 마커 기록 — 실험 중 원하는 시점
+**수동 마커 기록 — 실험 중 원하는 시점**
+
+```bash
 bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.sh" mark START_A
-bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_ENTRY
-bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_EXIT
+```
 
-# READY는 유지하고 녹화만 종료하려면
+```bash
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_ENTRY
+```
+
+```bash
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.sh" mark BUMP_EXIT
+```
+
+**READY는 유지하고 녹화만 종료하려면**
+
+```bash
 bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.sh" stop
 ```
 
@@ -408,8 +465,17 @@ bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready_bag.
 
 ```bash
 bash scripts/pid_lidar_test.sh start
+```
+
+```bash
 bash scripts/pid_lidar_test.sh status
+```
+
+```bash
 bash scripts/pid_lidar_test.sh stop
+```
+
+```bash
 bash scripts/pid_ready.sh start
 ```
 

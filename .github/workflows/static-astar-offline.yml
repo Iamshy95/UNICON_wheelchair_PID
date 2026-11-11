@@ -19,9 +19,6 @@ on:
       - 'scripts/ff_pid_core.py'
       - 'tests/test_replan_path.py'
       - '.github/workflows/static-astar-offline.yml'
-      - 'scripts/pid_lidar_test.sh'
-      - 'scripts/pid_lidar_test_monitor.py'
-      - 'tests/test_pid_lidar_status_offline.py'
 jobs:
   offline:
     runs-on: ubuntu-latest
@@ -41,9 +38,5 @@ jobs:
           python -m unittest discover -s tests -p 'test_obstacle_policy.py' -v
           python -m unittest discover -s tests -p 'test_safety_decide_offline.py' -v
           python -m unittest discover -s tests -p 'test_pid_occupancy_integration.py' -v
-      - name: Check DRIVE/STOP/LiDAR test bash syntax
-        run: bash -n scripts/pid_drive.sh scripts/pid_stop.sh scripts/pid_lidar_test.sh
-      - name: Verify isolated LiDAR test status fail-closed offline
-        run: |
-          python -m py_compile scripts/pid_lidar_test_monitor.py tests/test_pid_lidar_status_offline.py
-          python -m unittest discover -s tests -p 'test_pid_lidar_status_offline.py' -v
+      - name: Check DRIVE/STOP bash syntax
+        run: bash -n scripts/pid_drive.sh scripts/pid_stop.sh

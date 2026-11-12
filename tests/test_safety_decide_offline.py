@@ -102,6 +102,7 @@ def decide(items, astar=False, receding=False, moving_away=False):
     safety.enable_receding = receding
     safety.receding_tracks = Receding(moving_away)
     safety.static_votes = StaticVoteWindow()
+    safety.bump_stations = []  # No mapped speed bumps in the synthetic straight route.
     summary = {"stamp": 100.0, "status": "OK", "frame": "chair_centre",
                "objects": items}
     return safety.decide(100.0, (0., 0., 0.), None, None, summary, 100.0)

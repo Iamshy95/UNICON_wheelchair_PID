@@ -583,13 +583,17 @@ class Safety:
         if not self.enable_replan or self.route_version != "original":
             return
         if self.replan_mode in ("PLANNING", "STAGING", "FAILED"):
-            # Only a consistently CLEAR original route permits cancellation.
-            # Never cancel on one moving/static flip or a SLOW sample.
+            # Cancel a failed/pending detour when the ORIGINAL path has no
+            # blocking obstacle for 0.6s. Curvature/CTE/bump/goal SLOW is
+            # normal and must not strand the wheelchair in REPLAN_HOLD.
+            # STOP, stale perception, or any obstacle still in the path
+            # resets this confirmation interval (no single-frame release).
             fresh = (isinstance(objects, dict) and objects.get("status") == "OK"
                      and objects.get("frame") == "chair_centre"
                      and objects.get("stamp") is not None
                      and now - float(objects["stamp"]) <= OBSTACLE_TIMEOUT_S)
-            if state == "CLEAR" and fresh and info.get("obstacle_distance_m") is None:
+            if (state in ("CLEAR", "SLOW") and fresh
+                    and info.get("obstacle_distance_m") is None):
                 if self.replan_clear_since is None:
                     self.replan_clear_since = now
                 if now - self.replan_clear_since >= 0.6:

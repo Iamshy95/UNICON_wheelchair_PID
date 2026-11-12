@@ -105,6 +105,15 @@ if timeout 3 rosnode list 2>/dev/null | grep -Ex '/ff_pid|/pid_safety|/pid_astar
    pgrep -f '[f]f_pid_node.py' >/dev/null 2>&1; then
   fail "DRIVE components remain active. Verify MANUAL and run pid_stop.sh first."
 fi
+# READY may have initialized the wheel base even if its overall startup failed.
+# If a wheel-status publisher exists, stop only after a positive MANUAL + still
+# wheel check. A missing status must never be interpreted as stopped.
+if timeout 3 rostopic info /wheel_status 2>/dev/null | \
+   awk '/^Publishers:/ {p=1;next} /^Subscribers:/ {p=0} p && /^[[:space:]]*\\*/ {found=1} END {exit !found}'; then
+  [[ -f "$HERE/pid_drive_check.py" ]] || fail "Wheel stop checker is missing"
+  python3 "$HERE/pid_drive_check.py" wheel --mode MANUAL --stopped --timeout 4 || \
+    fail "Wheel stopped+MANUAL state is not verified. Do not tear down READY."
+fi
 if [[ -s "$READY_STATE_DIR/latest_run_dir" ]]; then
   echo "[STEP] 기존 READY 시스템 종료 및 기록 정리 중"
   [[ -f "$READY_SCRIPT" ]] || fail "READY cleanup script is missing: $READY_SCRIPT"

@@ -171,5 +171,78 @@ class ActualSafetyAggregation(unittest.TestCase):
         self.assertEqual((state, cap), ("STOP", 0.))
 
 
+class ReplanFailureRecovery(unittest.TestCase):
+    """A* failure must not latch STOP after the original path is obstacle-free."""
+
+    @staticmethod
+    def failed_safety():
+        safety = Safety.__new__(Safety)
+        safety.enable_replan = True
+        safety.route_version = "original"
+        safety.replan_mode = "FAILED"
+        safety.replan_id = "failed-detour"
+        safety.replan_error = "NO_PATH"
+        safety.replan_clear_since = None
+        safety.replan_candidate = None
+        safety.replan_obstacle_id = 7
+        safety.replan_started = None
+        safety.replan_stage_sent_at = None
+        safety.replan_pose = (0., 0., 0.)
+        safety.replan_occupancy = None
+        safety.station = 0.
+        safety.static_votes = StaticVoteWindow()
+        return safety
+
+    @staticmethod
+    def fresh(now):
+        return {"status": "OK", "frame": "chair_centre",
+                "stamp": now, "objects": []}
+
+    def step(self, safety, now, state, obstacle_distance=None, objects=None):
+        safety.update_replan(
+            now, state, "CURVATURE_LIMIT" if state == "SLOW" else "NO_RESTRICTION",
+            (0., 0., 0.), {"obstacle_distance_m": obstacle_distance},
+            self.fresh(now) if objects is None else objects)
+
+    def test_failed_astar_recovers_after_continuous_obstacle_free_slow(self):
+        safety = self.failed_safety()
+        self.step(safety, 10., "SLOW")
+        self.step(safety, 10.5, "SLOW")
+        self.assertEqual(safety.replan_mode, "FAILED")
+        self.step(safety, 10.61, "SLOW")
+        self.assertEqual(safety.replan_mode, "IDLE")
+        self.assertIsNone(safety.replan_error)
+
+    def test_obstacle_presence_and_stop_reset_recovery_timer(self):
+        safety = self.failed_safety()
+        self.step(safety, 10., "SLOW")
+        self.step(safety, 10.3, "SLOW", obstacle_distance=2.)
+        self.assertIsNone(safety.replan_clear_since)
+        self.step(safety, 10.7, "SLOW")
+        self.step(safety, 11., "STOP")
+        self.assertEqual(safety.replan_mode, "FAILED")
+        self.assertIsNone(safety.replan_clear_since)
+        self.step(safety, 11.1, "SLOW")
+        self.step(safety, 11.6, "SLOW")
+        self.assertEqual(safety.replan_mode, "FAILED")
+        self.step(safety, 11.71, "SLOW")
+        self.assertEqual(safety.replan_mode, "IDLE")
+
+    def test_stale_perception_cannot_clear_failed_astar(self):
+        safety = self.failed_safety()
+        self.step(safety, 10., "SLOW")
+        stale = {"status": "OK", "frame": "chair_centre",
+                 "stamp": 10., "objects": []}
+        self.step(safety, 11.1, "SLOW", objects=stale)
+        self.assertEqual(safety.replan_mode, "FAILED")
+        self.assertIsNone(safety.replan_clear_since)
+
+    def test_nonblocking_slow_is_not_a_stop_condition(self):
+        safety = self.failed_safety()
+        self.step(safety, 5., "SLOW")
+        self.step(safety, 5.61, "SLOW")
+        self.assertEqual(safety.replan_mode, "IDLE")
+
+
 if __name__ == "__main__":
     unittest.main()

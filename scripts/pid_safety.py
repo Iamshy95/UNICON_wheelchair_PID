@@ -59,7 +59,7 @@ CTE_SLOW_PER_M_MPS = 1.00                  # For each 1 cm beyond 0.30 m, reduce
 CTE_SPEED_FLOOR_MPS = 0.40
 CURVATURE_PREVIEW_M = 2.00                 # Ahead from current route station
 CURVATURE_SPEED_FLOOR_MPS = 0.60
-CURVATURE_FULL_SLOW_AT_INV_M = 0.40        # |kappa|=0.0 -> 0.8, >=0.4 -> 0.6 m/s
+CURVATURE_SLOW_START_INV_M = 0.20            # Top-20% |kappa| in next 2m >= 0.20 -> 0.6 m/s
 # Two mapped speed bumps, localized from FF-PD Nov 9/10 IMU/GICP logs.
 # These are map coordinates, not DWA speed-band or waypoint indices.
 BUMP_WORLD_XY_M = ((88.17, -12.31), (86.53, 2.44))
@@ -173,11 +173,11 @@ def speed_caps(route, station, cte):
     cte_cap = clamp(MAX_SPEED_MPS - CTE_SLOW_PER_M_MPS * excess,
                     CTE_SPEED_FLOOR_MPS, MAX_SPEED_MPS)
     curvature = route.top20_abs_curvature(station, CURVATURE_PREVIEW_M)
-    # Linear: 0.0 1/m -> 0.8 m/s; 0.4 1/m -> 0.6 m/s (then clamped).
-    curve_cap = clamp(
-        MAX_SPEED_MPS - (MAX_SPEED_MPS - CURVATURE_SPEED_FLOOR_MPS)
-        * curvature / CURVATURE_FULL_SLOW_AT_INV_M,
-        CURVATURE_SPEED_FLOOR_MPS, MAX_SPEED_MPS)
+    # Fixed cap when the top-20% mean of |kappa| over the next 2 m reaches 0.2 1/m.
+    # No curvature SLOW for gentler path segments; obstacle/bump/CTE/goal caps still apply.
+    curve_cap = (CURVATURE_SPEED_FLOOR_MPS
+                 if curvature >= CURVATURE_SLOW_START_INV_M
+                 else MAX_SPEED_MPS)
     return cte_cap, curve_cap, curvature
 
 
@@ -254,7 +254,7 @@ class Safety:
                 and 0 < CTE_SPEED_FLOOR_MPS <= MAX_SPEED_MPS
                 and 0 < CURVATURE_SPEED_FLOOR_MPS <= MAX_SPEED_MPS
                 and CTE_SPEED_START_M >= CTE_DEADZONE_M
-                and CTE_SLOW_PER_M_MPS > 0 and CURVATURE_FULL_SLOW_AT_INV_M > 0
+                and CTE_SLOW_PER_M_MPS > 0 and CURVATURE_SLOW_START_INV_M > 0
                 and FRONT_STOP_M < FRONT_SLOW_M
                 and 0 < BUMP_SPEED_CAP_MPS <= MAX_SPEED_MPS
                 and 0 < BUMP_APPROACH_M and 0 <= BUMP_EXIT_M

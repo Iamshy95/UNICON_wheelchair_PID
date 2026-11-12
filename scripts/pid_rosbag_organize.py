@@ -267,7 +267,7 @@ def main():
         ap.error("READY log directory missing: " + str(root))
     if args.run_dir:
         run = Path(args.run_dir).expanduser().resolve()
-        if not run.is_dir() or run.parent != root or not re.match(r"^\\d{8}_", run.name):
+        if not run.is_dir() or run.parent != root or not re.match(r"^\d{8}_", run.name):
             ap.error("--run-dir must be a READY session in --input-root")
         runs = [run]
     else:
@@ -356,7 +356,8 @@ def main():
                                    route=d.route, close=d.close) for d in drives],
                       outputs=output_names, exports_verified=completed,
                       originals_deleted=False)
-        # This tool never deletes original READY recordings.\n        tmp = target / "report.json.tmp"
+        # This tool never deletes original READY recordings.
+        tmp = target / "report.json.tmp"
         tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
                        encoding="utf-8")
         os.replace(str(tmp), str(target / "report.json"))

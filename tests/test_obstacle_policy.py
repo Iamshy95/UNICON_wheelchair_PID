@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
-from obstacle_policy import obstacle_restriction
+from obstacle_policy import obstacle_restriction, FRONT_STOP_M, FRONT_SLOW_M
 from receding_motion import RecedingTracks
 
 
@@ -20,17 +20,18 @@ class ObstaclePolicyTests(unittest.TestCase):
             distance, motion, receding, 0.8, 0.4,
             static_detour_enabled=True, receding_enabled=True)
 
-    def test_both_experimental_flags_off_preserve_legacy(self):
-        original_static = obstacle_restriction(1.5, "static", False, .8, .4)
-        original_receding = obstacle_restriction(1.5, "moving", True, .8, .4)
+    def test_both_experimental_flags_off_preserve_obstacle_policy(self):
+        slow_distance = (FRONT_STOP_M + FRONT_SLOW_M) / 2.
+        original_static = obstacle_restriction(slow_distance, "static", False, .8, .4)
+        original_receding = obstacle_restriction(slow_distance, "moving", True, .8, .4)
         self.assertEqual(original_static, original_receding)
         self.assertFalse(original_static[1])
-        self.assertTrue(obstacle_restriction(.9, "static", False, .8, .4)[1])
-        self.assertTrue(obstacle_restriction(.9, "moving", True, .8, .4)[1])
+        self.assertTrue(obstacle_restriction(FRONT_STOP_M, "static", False, .8, .4)[1])
+        self.assertTrue(obstacle_restriction(FRONT_STOP_M, "moving", True, .8, .4)[1])
 
-    def test_static_stops_exactly_at_two_metres(self):
-        self.assertEqual(self.policy(2.0, "static"), (0.0, True, "STATIC_PATH_OBSTACLE"))
-        self.assertFalse(self.policy(2.01, "static")[1])
+    def test_static_stops_at_current_slow_boundary(self):
+        self.assertEqual(self.policy(FRONT_SLOW_M, "static"), (0.0, True, "STATIC_PATH_OBSTACLE"))
+        self.assertFalse(self.policy(FRONT_SLOW_M + .01, "static")[1])
 
     def test_static_stops_even_if_close(self):
         self.assertTrue(self.policy(0.8, "static")[1])
@@ -40,13 +41,14 @@ class ObstaclePolicyTests(unittest.TestCase):
             self.assertTrue(self.policy(0.8, motion)[1])
             self.assertLess(self.policy(1.5, motion)[0], 0.8)
 
-    def test_receding_moving_ignores_only_one_to_two_metres(self):
-        for d in (1.001, 1.5, 2.0):
+    def test_receding_moving_ignores_only_stop_to_slow_band(self):
+        for d in (FRONT_STOP_M + .001, (FRONT_STOP_M + FRONT_SLOW_M) / 2.,
+                  FRONT_SLOW_M):
             self.assertEqual(self.policy(d, "moving", True)[0], 0.8)
             self.assertFalse(self.policy(d, "moving", True)[1])
 
-    def test_receding_moving_slows_inside_one_metre(self):
-        for d in (0.4, 0.99, 1.0):
+    def test_receding_moving_slows_inside_current_stop_distance(self):
+        for d in (0.4, FRONT_STOP_M - .01, FRONT_STOP_M):
             self.assertEqual(self.policy(d, "moving", True),
                              (0.4, False, "RECEDING_NEAR_SLOW"))
 

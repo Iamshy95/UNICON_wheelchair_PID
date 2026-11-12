@@ -416,7 +416,8 @@ class FFNode:
                 # Perception faults, bad geometry and mask boundary faults require
                 # an explicit new /ff_pid/start after the fault is resolved.
                 can_resume = data.get("reason") in (
-                    "PATH_OBSTACLE", "VERY_CLOSE_OBJECT", "RELEASE_CONFIRM", "REPLAN_HOLD")
+                    "PATH_OBSTACLE", "VERY_CLOSE_OBJECT", "STATIC_REPLAN_EARLY",
+                    "RELEASE_CONFIRM", "REPLAN_HOLD")
                 if self.enabled:
                     self.resume_after_obstacle = can_resume
                     self.obstacle_stopped = can_resume

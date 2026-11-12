@@ -98,6 +98,10 @@ esac
 # A test owns its *own* ROS Master and Livox process. Stop a registered
 # READY session first; never adopt/kill an unknown ROS session.
 # Do not tear down sensors while autonomous driving is active or unverified.
+[[ -f "$ROS_SETUP" ]] || fail "ROS Noetic setup missing: $ROS_SETUP"
+set +u
+source "$ROS_SETUP"
+set -u
 mkdir -p "$READY_STATE_DIR"
 exec 8>"$READY_STATE_DIR/start.lock"
 flock -n 8 || fail "READY startup is still running. Complete READY before testing."

@@ -87,4 +87,12 @@ if [[ "$VERIFIED" != 1 ]]; then
   msg '[WARN] FF-PD process cleanup requested, but physical stop is NOT verified.'
   exit 2
 fi
+# Notify the matching DRIVE shell only after verified physical STOP + cleanup.
+# This is not a motor-stop mechanism; it only releases the monitoring terminal.
+if [[ -n "${RUN_DIR:-}" && -s "$RUN_DIR/active_drive_session" ]]; then
+  IFS= read -r drive_session < "$RUN_DIR/active_drive_session" || true
+  if [[ "$drive_session" =~ ^[0-9]+_[0-9]+$ ]]; then
+    : > "$RUN_DIR/drive_stop_verified_$drive_session"
+  fi
+fi
 msg '[OK] FF-PD and Safety ended. READY sensor/GICP/bag remain running.'

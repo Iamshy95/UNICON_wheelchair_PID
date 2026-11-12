@@ -117,11 +117,14 @@ if timeout 3 rostopic info /wheel_status 2>/dev/null | \
   [[ -f "$HERE/pid_drive_check.py" ]] || fail "Wheel stop checker is missing"
   python3 "$HERE/pid_drive_check.py" wheel --mode MANUAL --stopped --timeout 4 || \
     fail "Wheel stopped+MANUAL state is not verified. Do not tear down READY."
+elif pgrep -f '[w]heel.launch' >/dev/null 2>&1; then
+  # A running base without wheel feedback cannot be assumed stationary.
+  fail "Wheel base remains active but stopped+MANUAL feedback is unavailable."
 fi
 if [[ -s "$READY_STATE_DIR/latest_run_dir" ]]; then
   echo "[STEP] 기존 READY 시스템 종료 및 기록 정리 중"
   [[ -f "$READY_SCRIPT" ]] || fail "READY cleanup script is missing: $READY_SCRIPT"
-  if ! bash "$READY_SCRIPT" stop; then
+  if ! bash "$READY_SCRIPT" stop 8>&-; then
     fail "READY cleanup did not finish. Inspect READY logs and registered processes."
   fi
   echo "[STEP] READY 종료 확인 완료"

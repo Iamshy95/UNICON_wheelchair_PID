@@ -1,0 +1,32 @@
+name: PID ROS bag automation (offline)
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/pid_rosbag_organize.py'
+      - 'scripts/pid_rosbag_auto.py'
+      - 'scripts/pid_rosbag_install_timer.sh'
+      - 'scripts/pid_ready_shutdown.sh'
+      - 'tests/test_pid_rosbag_auto_offline.py'
+      - '.github/workflows/pid-rosbag-auto-offline.yml'
+  pull_request:
+    paths:
+      - 'scripts/pid_rosbag_organize.py'
+      - 'scripts/pid_rosbag_auto.py'
+      - 'scripts/pid_rosbag_install_timer.sh'
+      - 'scripts/pid_ready_shutdown.sh'
+      - 'tests/test_pid_rosbag_auto_offline.py'
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate shell and Python syntax
+        run: |
+          bash -n scripts/pid_ready_shutdown.sh scripts/pid_rosbag_install_timer.sh
+          python -m py_compile scripts/pid_rosbag_organize.py scripts/pid_rosbag_auto.py tests/test_pid_rosbag_auto_offline.py
+      - name: Verify no-ROS drive split and no-delete behavior
+        run: python -m unittest discover -s tests -p 'test_pid_rosbag_auto_offline.py' -v

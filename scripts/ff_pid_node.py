@@ -637,6 +637,11 @@ class FFNode:
                     self.core.wheel_track, self.core.min_wheel, self.core.max_wheel,
                     diagnostics=limiter_diagnostics)
                 result.update(limiter_diagnostics)
+                # Update leaky I memory only after BOTH steering feasibility and
+                # final wheel/slew-rate limiting have been applied. This state
+                # is used by the next control cycle; KI=0 is an exact no-op.
+                result.update(self.core.update_integral_after_command(
+                    result, command_w, dt))
                 # Capture both control stages and effective tunings in /ff_pid/status.
                 # pid_ready_bag.sh already records this topic at controller rate.
                 result["route"] = self.route_name

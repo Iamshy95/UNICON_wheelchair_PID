@@ -136,30 +136,24 @@ def main():
             print("[OK] No pending completed READY recordings")
             return 0
 
-        # The existing organizer accepts a date, not an individual run.
-        # Never process a date while ANY session for that date is still running.
-        dates = sorted(set(run.name[:8] for run, _, _ in candidates))
         trouble = False
-        for date in dates:
-            date_runs = [r for r in root.iterdir()
-                         if r.is_dir() and SESSION.fullmatch(r.name)
-                         and r.name[:8] == date]
-            if any(session_busy(r) for r in date_runs):
-                print("[SKIP] %s: READY still running on that date" % date)
+        for run, paths, sig in candidates:
+            # Recheck after acquiring the global lock; a new READY may have
+            # started since discovery. A running recorder is never touched.
+            if session_busy(run):
+                print("[SKIP] %s: READY processes still running" % run.name)
                 continue
-            wanted = [(run, paths, sig) for run, paths, sig in candidates
-                      if run.name[:8] == date]
-            total = sum(sum(f.stat().st_size for f in paths)
-                        for _, paths, _ in wanted)
+            total = sum(f.stat().st_size for f in paths)
             free = shutil.disk_usage(str(out)).free
-            # In worst case copies could match input size: retain 2 GiB slack.
-            if free < total + 2 * GIB:
-                print("[SKIP] %s: disk space low (free %.1f GiB, need %.1f GiB)"
-                      % (date, free / GIB, (total + 2 * GIB) / GIB))
+            # Conservative: source-sized export + source-sized recovery copy
+            # + 2GiB reserve. Failure skips, never removes originals.
+            if free < 2 * total + 2 * GIB:
+                print("[SKIP] %s: disk low (free %.1f GiB, need %.1f GiB)" %
+                      (run.name, free / GIB, (2 * total + 2 * GIB) / GIB))
                 trouble = True
                 continue
-            print("[INFO] %s: %d READY sessions, %.2f GiB raw, free %.2f GiB"
-                  % (date, len(wanted), total / GIB, free / GIB), flush=True)
+            print("[INFO] %s: %.2f GiB input, %.2f GiB free" %
+                  (run.name, total / GIB, free / GIB), flush=True)
             if args.dry_run:
                 continue
             organizer = Path(__file__).resolve().with_name("pid_rosbag_organize.py")
@@ -167,41 +161,37 @@ def main():
                 print("[ERROR] Organizer missing: %s" % organizer)
                 trouble = True
                 continue
-            command = [sys.executable, str(organizer), "--date",
-                       "%s-%s-%s" % (date[:4], date[4:6], date[6:]),
-                       "--write", "--recover-active",
+            command = [sys.executable, str(organizer),
+                       "--run-dir", str(run), "--write", "--recover-active",
                        "--input-root", str(root), "--output-root", str(out)]
             print("[RUN] %s" % " ".join(command), flush=True)
             rc = subprocess.call(command)
             if rc:
-                print("[WARN] Organizer failed (%d). Originals preserved." % rc)
+                print("[WARN] Organizer failed (%d); originals preserved" % rc)
                 trouble = True
-            for run, paths, sig in wanted:
-                target = out / date / run.name
-                report_file = target / "report.json"
-                try:
-                    report = json.loads(report_file.read_text())
-                    recovered = report.get("recovery", [])
-                    outputs = report.get("outputs", [])
-                    verified = (report.get("exports_verified") is True
-                                and all(it.get("status") in
-                                        ("RECOVERED_COPY", "ZERO_BYTES")
-                                        for it in recovered)
-                                and all(Path(f).is_file()
-                                        and Path(f).stat().st_size > 0
-                                        for f in outputs))
-                    if not verified or sig != signature(sources(run)):
-                        raise ValueError("Incomplete export/recovery or source changed")
-                    record = {"source_signature": sig, "processed_at": time.time(),
-                              "outputs": outputs, "originals_deleted": False}
-                    tmp = target / "auto_complete.json.tmp"
-                    tmp.write_text(json.dumps(record, indent=2) + "\n")
-                    os.replace(str(tmp), str(target / "auto_complete.json"))
-                    print("[OK] %s: %d separated drives; all originals retained"
-                          % (run.name, len(outputs)), flush=True)
-                except (OSError, ValueError, TypeError) as exc:
-                    print("[WARN] %s remains pending: %s" % (run.name, exc))
-                    trouble = True
+                continue
+            target = out / run.name[:8] / run.name
+            try:
+                report = json.loads((target / "report.json").read_text())
+                recovered = report.get("recovery", [])
+                outputs = report.get("outputs", [])
+                verified = (report.get("exports_verified") is True
+                            and all(it.get("status") in ("RECOVERED_COPY", "ZERO_BYTES")
+                                    for it in recovered)
+                            and all(Path(f).is_file() and Path(f).stat().st_size > 0
+                                    for f in outputs))
+                if not verified or sig != signature(sources(run)) or session_busy(run):
+                    raise ValueError("incomplete exports or session changed")
+                record = {"source_signature": sig, "processed_at": time.time(),
+                          "outputs": outputs, "originals_deleted": False}
+                tmp = target / "auto_complete.json.tmp"
+                tmp.write_text(json.dumps(record, indent=2) + "\n")
+                os.replace(str(tmp), str(target / "auto_complete.json"))
+                print("[OK] %s: %d separate drives; originals intact" %
+                      (run.name, len(outputs)), flush=True)
+            except (OSError, ValueError, TypeError) as exc:
+                print("[WARN] %s remains pending: %s" % (run.name, exc))
+                trouble = True
         return 1 if trouble else 0
 
 

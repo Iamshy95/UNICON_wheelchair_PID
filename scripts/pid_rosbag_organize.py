@@ -7,12 +7,13 @@ NUC (ROS Master does not need to be running):
   python3 scripts/pid_rosbag_organize.py --date 2026-11-10 --write
   python3 scripts/pid_rosbag_organize.py --date 2026-11-10 --write --recover-active
 
-Default = inspection ONLY. --write never deletes original files.
+Default = inspection ONLY. --write NEVER deletes or rewrites original files.
 Recovery reindexes a COPY of .bag.active, never the original.
---delete-safe is explicit, conservative, and refuses interrupted sessions.
+--run-dir selects one session; --date is retained for manual inspection.
 """
 import argparse
 import datetime as dt
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 
 PRE_S = 20.0
@@ -27,7 +29,8 @@ POST_S = 15.0
 TOPICS = ("/ff_pid/status", "/wheel_status", "/mode_cmd", "/cmd_vel",
           "/stop_watchdog/alarm")
 CLOSE = {"PAUSED", "MANUAL_INTERVENTION", "GOAL_STOPPING", "GOAL_REACHED",
-         "COMPETING_CMD_VEL_PUBLISHER"}
+         "COMPETING_CMD_VEL_PUBLISHER", "EXTERNAL_STOP_REQUEST",
+         "SAFETY_POLICY_INVALID"}
 
 
 @dataclass
@@ -78,6 +81,12 @@ def recorder_alive(directory):
         return False
 
 
+def enough_space(directory, extra_bytes):
+    directory.mkdir(parents=True, exist_ok=True)
+    # Keep at least 1 GiB available after copying the recording/export.
+    return shutil.disk_usage(str(directory)).free >= extra_bytes + 1024 ** 3
+
+
 def valid_bag(path):
     import rosbag
     with rosbag.Bag(str(path), "r") as bag:
@@ -97,6 +106,8 @@ def recovered_copy(active, destination):
         raise RuntimeError("previous recovery attempt needs inspection: " + str(temp))
     if active.stat().st_size == 0:
         raise ValueError("0-byte .bag.active: no data to recover")
+    if not enough_space(destination.parent, active.stat().st_size):
+        raise RuntimeError("insufficient disk space for active recovery")
     shutil.copy2(str(active), str(temp))
     proc = subprocess.run(["rosbag", "reindex", str(temp)],
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -199,6 +210,8 @@ def analyze(paths):
 def export(paths, drive, dest):
     import genpy
     import rosbag
+    if not enough_space(dest.parent, sum(p.stat().st_size for p in paths)):
+        raise RuntimeError("insufficient disk space for drive export")
     lo = genpy.Time.from_sec(max(0.0, drive.start - PRE_S))
     hi = genpy.Time.from_sec(drive.end + POST_S)
     temp = dest.with_name(dest.name + ".partial")
@@ -226,23 +239,22 @@ def export(paths, drive, dest):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--date", required=True, help="READY directory date: YYYY-MM-DD")
+    group = ap.add_mutually_exclusive_group(required=True)
+    group.add_argument("--date", help="READY directory date: YYYY-MM-DD")
+    group.add_argument("--run-dir", help="one READY session directory")
     ap.add_argument("--input-root", default="~/pid_ready_logs")
     ap.add_argument("--output-root", default="~/pid_drive_bags")
     ap.add_argument("--write", action="store_true", help="write separated drives; originals untouched")
     ap.add_argument("--recover-active", action="store_true",
                     help="with --write, try to recover nonzero .bag.active COPIES")
-    ap.add_argument("--delete-safe", action="store_true",
-                    help="explicitly delete originals ONLY for completely closed, unambiguous sessions")
     args = ap.parse_args()
-    try:
-        dt.datetime.strptime(args.date, "%Y-%m-%d")
-    except ValueError:
-        ap.error("invalid --date")
+    if args.date:
+        try:
+            dt.datetime.strptime(args.date, "%Y-%m-%d")
+        except ValueError:
+            ap.error("invalid --date")
     if args.recover_active and not args.write:
         ap.error("--recover-active requires --write")
-    if args.delete_safe and not args.write:
-        ap.error("--delete-safe requires --write")
     try:
         import rosbag  # noqa: F401
     except ImportError:
@@ -253,20 +265,29 @@ def main():
         ap.error("input and output directories must be separate")
     if not root.is_dir():
         ap.error("READY log directory missing: " + str(root))
-    prefix = args.date.replace("-", "") + "_"
-    runs = sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith(prefix))
+    if args.run_dir:
+        run = Path(args.run_dir).expanduser().resolve()
+        if not run.is_dir() or run.parent != root or not re.match(r"^\\d{8}_", run.name):
+            ap.error("--run-dir must be a READY session in --input-root")
+        runs = [run]
+    else:
+        prefix = args.date.replace("-", "") + "_"
+        runs = sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith(prefix))
     if not runs:
-        print("[INFO] No READY directories for " + args.date)
+        print("[INFO] No matching READY session directories")
         return 0
     for run in runs:
         closed = sorted(run.glob("ready_topics*.bag"))
         active = sorted(run.glob("ready_topics*.bag.active"))
         live = recorder_alive(run)
-        target = out / args.date.replace("-", "") / run.name
+        target = out / run.name[:8] / run.name
         print("\n=== %s: %d bag, %d active, live=%s ===" %
               (run.name, len(closed), len(active), live), flush=True)
         if live:
             print("[KEEP] Recorder still running; no processing or deletion")
+            continue
+        if active and any(time.time() - p.stat().st_mtime < 120 for p in active):
+            print("[KEEP] Active file has changed recently; retry later")
             continue
         files = list(closed)
         recovery = []
@@ -329,26 +350,13 @@ def main():
                 completed = False
                 print("[KEEP] Export failed: %s (%s)" % (name, exc))
                 break
-        report = dict(date=args.date, run=str(run), originals=[str(x) for x in closed],
+        report = dict(date=run.name[:8], run=str(run), originals=[str(x) for x in closed],
                       recovery=recovery, evidence=evidence,
                       drives=[dict(start=stamp(d.start), end=stamp(d.end),
                                    route=d.route, close=d.close) for d in drives],
                       outputs=output_names, exports_verified=completed,
                       originals_deleted=False)
-        # Explicit deletion is intentionally disabled for active/recovered sessions.
-        # Also require unambiguous drive-end evidence and no manual/unknown motion.
-        safe = (completed and not active and not evidence["uncertain"] and
-                ((bool(drives) and all(d.close != "UNCLOSED" for d in drives))
-                 or (not drives and evidence["wheel_messages"] >= 10
-                     and evidence["ff_status_messages"] == 0)))
-        if args.delete_safe and safe:
-            for src in closed:
-                src.unlink()
-            report["originals_deleted"] = True
-            print("[PRUNED] %d verified original files" % len(closed))
-        elif args.delete_safe:
-            print("[KEEP] Uncertain/incomplete recording or unverified outputs")
-        tmp = target / "report.json.tmp"
+        # This tool never deletes original READY recordings.\n        tmp = target / "report.json.tmp"
         tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
                        encoding="utf-8")
         os.replace(str(tmp), str(target / "report.json"))

@@ -21,7 +21,7 @@ bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_ready.sh" 
 ## 주행 시작
 
 ```bash
-bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_drive.sh"
+bash "$HOME/wheelchair_deploys/ffpid/source-linux/src/pid/scripts/pid_drive.sh" A_to_D5
 ```
 
 ## 주행 종료

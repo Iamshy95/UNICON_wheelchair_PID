@@ -108,6 +108,51 @@ def decide(items, astar=False, receding=False, moving_away=False):
     return safety.decide(100.0, (0., 0., 0.), None, None, summary, 100.0)
 
 
+class BumpSpeedProfile(unittest.TestCase):
+    """Check each bump independently, including reverse and single-bump paths."""
+
+    def test_two_bumps_release_the_full_midsection(self):
+        from pid_safety import bump_speed_cap
+        bumps = (10.0, 24.83)
+        for station, expected in (
+            (6.9, 0.8), (7.0, 0.8), (8.5, 0.65),
+            (10.0, 0.5), (11.0, 0.5),
+            (11.001, 0.8), (17.0, 0.8), (21.83, 0.8),
+            (23.33, 0.65), (24.83, 0.5),
+            (25.83, 0.5), (25.831, 0.8),
+        ):
+            with self.subTest(station=station):
+                self.assertAlmostEqual(bump_speed_cap(station, bumps), expected)
+
+    def test_a_single_mapped_bump_is_not_silently_ignored(self):
+        from pid_safety import bump_speed_cap, locate_route_bumps, BUMP_WORLD_XY_M
+
+        class FakeRoute:
+            def project(self, x, y, hint=None):
+                matched_first = abs(x - BUMP_WORLD_XY_M[0][0]) < 1e-4
+                return (10.0 if matched_first else 24.83,
+                        0.0, 0.1 if matched_first else 0.7, 0.0)
+
+        stations = locate_route_bumps(FakeRoute())
+        self.assertEqual(stations, (10.0,))
+        self.assertAlmostEqual(bump_speed_cap(10.0, stations), 0.5)
+        self.assertAlmostEqual(bump_speed_cap(12.0, stations), 0.8)
+        self.assertAlmostEqual(bump_speed_cap(10.0, ()), 0.8)
+
+    def test_reverse_path_sorts_bumps_in_travel_order(self):
+        from pid_safety import bump_speed_cap, locate_route_bumps, BUMP_WORLD_XY_M
+
+        class ReverseRoute:
+            def project(self, x, y, hint=None):
+                matched_first = abs(x - BUMP_WORLD_XY_M[0][0]) < 1e-4
+                return (24.83 if matched_first else 10.0, 0.0, 0.0, 0.0)
+
+        stations = locate_route_bumps(ReverseRoute())
+        self.assertEqual(stations, (10.0, 24.83))
+        self.assertAlmostEqual(bump_speed_cap(17.0, stations), 0.8)
+        self.assertAlmostEqual(bump_speed_cap(24.83, stations), 0.5)
+
+
 class ActualSafetyAggregation(unittest.TestCase):
     def test_static_two_metre_stop_with_astar_enabled(self):
         state, cap, reason, info = decide([obj(7, 2.5, "static")], astar=True)

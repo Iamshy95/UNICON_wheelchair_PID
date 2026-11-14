@@ -65,8 +65,8 @@ CURVATURE_SLOW_START_INV_M = 0.20            # Top-20% |kappa| in next 2m >= 0.2
 BUMP_WORLD_XY_M = ((88.17, -12.31), (86.53, 2.44))
 BUMP_ROUTE_MATCH_MAX_M = 0.50             # Ignore bumps not traversed by the active route
 BUMP_APPROACH_M = 3.00                    # Start lowering the speed ceiling this far ahead
-BUMP_EXIT_M = 3.00                        # Hold low cap beyond second bump
-BUMP_SPEED_CAP_MPS = 0.40                 # Provisional; physical bump safety NOT verified
+BUMP_EXIT_M = 1.00                        # Hold low cap for 1 m after EACH bump
+BUMP_SPEED_CAP_MPS = 0.50                 # Provisional; physical bump safety NOT verified
 # Limit speed as the chair approaches the final waypoint. The controller still
 # owns final stopping at GOAL_TOLERANCE_M=0.40; keep these distances in sync.
 GOAL_SLOWDOWN_START_M = 3.00              # Remaining route distance for deceleration [m]
@@ -192,10 +192,10 @@ def obstacle_speed_cap(distance):
 
 
 def locate_route_bumps(route):
-    """Return bump stations in active-route order, only for geometrically matched paths.
+    """Return geometrically matched bump stations in active-route order.
 
-    Recompute on each committed A* route; never use original-route indices on a detour.
-    The route is assumed to represent the travelled chair-centre reference path.
+    Every matched bump is independently limited, even if the route misses the
+    other one. The route is assumed to represent the travelled chair-centre path.
     """
     stations = []
     for x, y in BUMP_WORLD_XY_M:
@@ -203,29 +203,27 @@ def locate_route_bumps(route):
         station, _, lateral_distance, _ = route.project(x, y, hint=None)
         if lateral_distance <= BUMP_ROUTE_MATCH_MAX_M:
             stations.append(float(station))
-    if len(stations) != len(BUMP_WORLD_XY_M):
-        return ()
-    stations.sort()  # Forward path order, regardless of A->D5 or D5->A.
+    stations.sort()  # Active travel order, including reverse-direction routes.
     return tuple(stations)
 
 
 def bump_speed_cap(station, bump_stations):
-    """0.8->0.4 m/s over 3 m approaching first bump, then hold past second bump.
+    """Limit each mapped bump independently: 3 m approach, 1 m exit.
 
-    No full release until after the second bump plus BUMP_EXIT_M; other Safety
-    caps and STOP decisions always have priority. There is no slowdown when
-    bumps are not found on the current route.
+    Approach cap falls linearly from the normal maximum to 0.5 m/s.
+    Hold 0.5 m/s on the bump and for 1 m afterward, then release the
+    bump-specific cap completely. Other Safety caps and STOP still apply.
+    Stations are measured along the ACTIVE route, so both directions work.
     """
-    if len(bump_stations) != 2:
-        return MAX_SPEED_MPS
-    first, last = bump_stations
-    if station < first - BUMP_APPROACH_M or station > last + BUMP_EXIT_M:
-        return MAX_SPEED_MPS
-    if station >= first:
-        return BUMP_SPEED_CAP_MPS
-    fraction = (first - station) / BUMP_APPROACH_M
-    return BUMP_SPEED_CAP_MPS + fraction * (MAX_SPEED_MPS - BUMP_SPEED_CAP_MPS)
-
+    cap = MAX_SPEED_MPS
+    for bump_station in bump_stations:
+        if bump_station - BUMP_APPROACH_M <= station < bump_station:
+            fraction = (bump_station - station) / BUMP_APPROACH_M
+            cap = min(cap, BUMP_SPEED_CAP_MPS +
+                      fraction * (MAX_SPEED_MPS - BUMP_SPEED_CAP_MPS))
+        elif bump_station <= station <= bump_station + BUMP_EXIT_M:
+            cap = min(cap, BUMP_SPEED_CAP_MPS)
+    return cap
 
 def goal_speed_cap(remaining_m):
     """Linear approach ceiling; final zero-speed command remains FFNode's job."""

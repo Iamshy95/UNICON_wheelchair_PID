@@ -243,6 +243,7 @@ class SafetyReleaseConfirmation(unittest.TestCase):
         self.assertFalse(safety.release_confirmed(100., self.fresh(100.)))
         self.assertFalse(safety.release_confirmed(100.1, self.fresh(100.)))
         self.assertFalse(safety.release_confirmed(100.2, self.fresh(100.)))
+        self.assertFalse(safety.release_confirmed(100.3, self.fresh(100.)))
         self.assertIsNone(safety.release_since)
         self.assertFalse(safety.release_confirmed(100.21, self.fresh(100.21)))
 

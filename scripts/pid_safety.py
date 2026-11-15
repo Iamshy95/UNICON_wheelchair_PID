@@ -76,7 +76,8 @@ POSE_MAX_AGE_S = 0.50
 PREDICTED_MAX_AGE_S = 0.30
 OBSTACLE_TIMEOUT_S = 1.00
 POLICY_PERIOD_S = 0.10
-STOP_CLEAR_CONFIRM_S = 0.30               # Brief stable clear before restart
+STOP_CLEAR_CONFIRM_S = 0.10               # Stable clear duration before restart [s]
+RELEASE_OBSERVATION_MAX_AGE_S = 0.25      # Require genuinely fresh 10Hz perception during release
 SLOW_THRESHOLD_MPS = 0.005                # Avoid float noise at MAX_SPEED
 MAX_OBJECTS = 200
 MAX_PROFILE_SAMPLES = 500
@@ -310,6 +311,8 @@ class Safety:
         self.applied_pub = rospy.Publisher("/ff_pid/active_route", String, queue_size=1, latch=True)
         self.last_state, self.last_reason = None, None
         self.release_since = None
+        self.release_last_observation_stamp = None
+        self.release_clear_observations = 0
         self.policy_pub = rospy.Publisher("/ff_pid/motion_policy", String, queue_size=2)
         self.status_pub = rospy.Publisher("/pid_safety/status", String, queue_size=3)
         rospy.Subscriber("/fast_lio_icp/pose", PoseWithCovarianceStamped,
@@ -779,6 +782,50 @@ class Safety:
             return "SLOW", cap, reason, info
         return "CLEAR", MAX_SPEED_MPS, "NO_RESTRICTION", info
 
+    def reset_release_confirmation(self):
+        """Discard an incomplete clearance sequence after any unsafe decision."""
+        self.release_since = None
+        self.release_last_observation_stamp = None
+        self.release_clear_observations = 0
+
+    def release_confirmed(self, now, objects):
+        """Require two distinct fresh, ordered clear observations AND 0.1s elapsed.
+
+        Called only after decide() has accepted the current observation as
+        CLEAR/SLOW. Safety and perception both nominally run at 10Hz, but are
+        not synchronized; repeatedly deciding on one frame must not release STOP.
+        """
+        stamp = objects.get("stamp") if isinstance(objects, dict) else None
+        if (not isinstance(stamp, (int, float)) or not math.isfinite(stamp)
+                or stamp <= 0 or stamp > now + 0.2
+                or now - stamp > RELEASE_OBSERVATION_MAX_AGE_S):
+            self.reset_release_confirmation()
+            return False
+
+        if self.release_since is None:
+            self.release_since = now
+            self.release_last_observation_stamp = stamp
+            self.release_clear_observations = 1
+            return False
+
+        previous = self.release_last_observation_stamp
+        if (stamp < previous or
+                stamp - previous > RELEASE_OBSERVATION_MAX_AGE_S):
+            # Out-of-order or missing perception frames cannot complete a
+            # clearance sequence; start again from this fresh safe frame.
+            self.reset_release_confirmation()
+            self.release_since = now
+            self.release_last_observation_stamp = stamp
+            self.release_clear_observations = 1
+            return False
+
+        if stamp > previous:
+            self.release_last_observation_stamp = stamp
+            self.release_clear_observations += 1
+
+        return (self.release_clear_observations >= 2
+                and now - self.release_since >= STOP_CLEAR_CONFIRM_S)
+
     def tick(self, _event):
         now = rospy.Time.now().to_sec()
         with self.lock:
@@ -796,15 +843,13 @@ class Safety:
                     state, cap, reason, info = self.decide(
                         now, pose, pred_pose, pred_cte, objects, received)
                     if self.last_state == "STOP" and state != "STOP":
-                        if self.release_since is None:
-                            self.release_since = now
-                        if now - self.release_since < STOP_CLEAR_CONFIRM_S:
+                        if not self.release_confirmed(now, objects):
                             state, cap, reason = "STOP", 0., "RELEASE_CONFIRM"
                     else:
-                        self.release_since = None
+                        self.reset_release_confirmation()
             except Exception as exc:
                 state, cap, reason, info = "STOP", 0., "SAFETY_EXCEPTION", {}
-                self.release_since = None
+                self.reset_release_confirmation()
                 rospy.logerr_throttle(2, "Safety decision failed: %s", exc)
             # During a path transaction, motion is held regardless of old-path
             # clearance; only an APPLIED acknowledgement releases the hold.

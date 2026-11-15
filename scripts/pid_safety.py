@@ -824,7 +824,7 @@ class Safety:
             self.release_clear_observations += 1
 
         return (self.release_clear_observations >= 2
-                and now - self.release_since >= STOP_CLEAR_CONFIRM_S)
+                and now - self.release_since >= STOP_CLEAR_CONFIRM_S - 1e-9)
 
     def tick(self, _event):
         now = rospy.Time.now().to_sec()

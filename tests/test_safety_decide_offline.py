@@ -217,6 +217,72 @@ class ActualSafetyAggregation(unittest.TestCase):
         self.assertEqual((state, cap), ("STOP", 0.))
 
 
+class SafetyReleaseConfirmation(unittest.TestCase):
+    """Two distinct safe perception frames plus 100ms, never one reused frame."""
+
+    @staticmethod
+    def fresh(stamp):
+        return {"stamp": stamp, "status": "OK", "frame": "chair_centre",
+                "objects": []}
+
+    @staticmethod
+    def new_safety():
+        safety = Safety.__new__(Safety)
+        safety.release_since = None
+        safety.release_last_observation_stamp = None
+        safety.release_clear_observations = 0
+        return safety
+
+    def test_two_fresh_frames_after_100ms_allow_release(self):
+        safety = self.new_safety()
+        self.assertFalse(safety.release_confirmed(100., self.fresh(100.)))
+        self.assertTrue(safety.release_confirmed(100.1, self.fresh(100.1)))
+
+    def test_repeated_frame_cannot_release_even_after_100ms(self):
+        safety = self.new_safety()
+        self.assertFalse(safety.release_confirmed(100., self.fresh(100.)))
+        self.assertFalse(safety.release_confirmed(100.1, self.fresh(100.)))
+        self.assertFalse(safety.release_confirmed(100.2, self.fresh(100.)))
+        self.assertIsNone(safety.release_since)
+        self.assertFalse(safety.release_confirmed(100.21, self.fresh(100.21)))
+
+    def test_second_frame_before_100ms_still_waits(self):
+        safety = self.new_safety()
+        self.assertFalse(safety.release_confirmed(100., self.fresh(100.)))
+        self.assertFalse(safety.release_confirmed(100.05, self.fresh(100.05)))
+        self.assertTrue(safety.release_confirmed(100.10, self.fresh(100.10)))
+
+    def test_unsafe_decision_reset_discards_previous_frame(self):
+        safety = self.new_safety()
+        self.assertFalse(safety.release_confirmed(100., self.fresh(100.)))
+        safety.reset_release_confirmation()
+        self.assertFalse(safety.release_confirmed(100.12, self.fresh(100.12)))
+        self.assertTrue(safety.release_confirmed(100.22, self.fresh(100.22)))
+
+    def test_stale_or_invalid_frame_resets_confirmation(self):
+        for invalid in (self.fresh(99.0), self.fresh(float("nan")),
+                        {"stamp": None}, None):
+            with self.subTest(invalid=invalid):
+                safety = self.new_safety()
+                self.assertFalse(safety.release_confirmed(100., self.fresh(100.)))
+                self.assertFalse(safety.release_confirmed(100.1, invalid))
+                self.assertIsNone(safety.release_since)
+
+    def test_out_of_order_frame_restarts_confirmation(self):
+        safety = self.new_safety()
+        self.assertFalse(safety.release_confirmed(100.1, self.fresh(100.1)))
+        self.assertFalse(safety.release_confirmed(100.2, self.fresh(100.05)))
+        self.assertEqual(safety.release_clear_observations, 1)
+        self.assertTrue(safety.release_confirmed(100.3, self.fresh(100.3)))
+
+    def test_missing_frames_restart_confirmation(self):
+        safety = self.new_safety()
+        self.assertFalse(safety.release_confirmed(100., self.fresh(100.)))
+        self.assertFalse(safety.release_confirmed(100.5, self.fresh(100.5)))
+        self.assertEqual(safety.release_clear_observations, 1)
+        self.assertTrue(safety.release_confirmed(100.6, self.fresh(100.6)))
+
+
 class ReplanFailureRecovery(unittest.TestCase):
     """A* failure must not latch STOP after the original path is obstacle-free."""
 

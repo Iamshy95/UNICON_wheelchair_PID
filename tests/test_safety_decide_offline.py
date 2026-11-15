@@ -284,6 +284,49 @@ class SafetyReleaseConfirmation(unittest.TestCase):
         self.assertTrue(safety.release_confirmed(100.6, self.fresh(100.6)))
 
 
+class ObstacleResumeLaunch(unittest.TestCase):
+    """An obstacle-only 0.3 m/s first command must retain the 0.8 m/s² ramp."""
+
+    @staticmethod
+    def limited(previous, target, dt=0.02, floor=0.0):
+        from ff_pid_core import limit_running_command
+        diag = {}
+        v, w = limit_running_command(
+            previous, 0.0, target, 0.0, dt, 0.46, 0.30, 1.0,
+            diagnostics=diag, launch_floor_mps=floor)
+        return v, w, diag
+
+    def test_obstacle_resume_skips_near_zero_only_once(self):
+        v, w, diagnostic = self.limited(0.0, 0.8, floor=0.3)
+        self.assertAlmostEqual(v, 0.3)
+        self.assertEqual(w, 0.0)
+        self.assertTrue(diagnostic["limiter_launch_floor_applied"])
+        v2, _, next_diag = self.limited(v, 0.8)
+        self.assertAlmostEqual(v2, 0.316)
+        self.assertFalse(next_diag["limiter_launch_floor_applied"])
+
+    def test_normal_start_is_not_affected(self):
+        v, w, _ = self.limited(0.0, 0.8)
+        self.assertAlmostEqual(v, 0.016)
+        self.assertAlmostEqual(w, 0.0)
+
+    def test_floor_never_exceeds_safety_speed_ceiling(self):
+        v, _, diag = self.limited(0.0, 0.2, floor=0.3)
+        self.assertAlmostEqual(v, 0.2)
+        self.assertFalse(diag["limiter_launch_floor_applied"])
+
+    def test_deceleration_and_invalid_floors_unchanged(self):
+        v, _, _ = self.limited(0.5, 0.4, floor=0.3)
+        self.assertAlmostEqual(v, 0.4)
+        from ff_pid_core import limit_running_command
+        for bad in (-0.1, float("nan"), 1.2):
+            with self.subTest(floor=bad):
+                with self.assertRaises(ValueError):
+                    limit_running_command(
+                        0.0, 0.0, 0.8, 0.0, 0.02,
+                        0.46, 0.3, 1.0, launch_floor_mps=bad)
+
+
 class ReplanFailureRecovery(unittest.TestCase):
     """A* failure must not latch STOP after the original path is obstacle-free."""
 

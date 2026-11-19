@@ -4,7 +4,7 @@ ROS1 Noetic 기반 전동휠체어의 **FF–PID 경로 추종 및 Safety 제어
 
 ## 관련 GitHub 및 버전
 
-- **민준님 원본 저장소:** https://github.com/mnjn00/Uniconlab-autonomous-wheelchair
+- **원본 휠체어 프로젝트:** https://github.com/mnjn00/Uniconlab-autonomous-wheelchair
 - **팀 전체 휠체어 저장소:** https://github.com/Dannythechampion/UNICON_wheelchair_v2
 - **팀에서 사용하는 FF–PID 브랜치:** https://github.com/Dannythechampion/UNICON_wheelchair_v2/tree/feature/ffpid
 - **개인 FF–PID 저장소(현재 저장소):** https://github.com/Iamshy95/UNICON_wheelchair_PID
@@ -18,13 +18,7 @@ ROS1 Noetic 기반 전동휠체어의 **FF–PID 경로 추종 및 Safety 제어
 
 **[QUICKSTART — READY·주행 시작·종료·상태 확인 명령어](QUICKSTART.md)**
 
-노트북을 NUC와 같은 유선 네트워크에 연결한 다음 SSH로 접속해 사용합니다.
-
-```bash
-ssh mprp3@192.168.1.5
-```
-
-SSH 접속 후 **NUC 터미널에서** QUICKSTART 명령어를 실행하면 됩니다. 새 터미널에서 주행 종료나 상태 모니터링을 할 때도 각각 NUC에 SSH로 접속해야 합니다.
+**NUC에 SSH로 접속**한 후 [QUICKSTART](QUICKSTART.md)의 명령어를 실행하면 됩니다.
 
 - **READY 시작:** LiDAR·IMU, FAST-LIO, GICP 위치추정, 장애물 인식, 바퀴 통신을 준비합니다.
 - **DRIVE 시작:** 6개 경로 중 하나를 선택해 자율주행합니다.

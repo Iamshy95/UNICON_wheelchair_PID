@@ -4,7 +4,7 @@ ROS1 Noetic 기반 전동휠체어의 **FF–PID 경로 추종 및 Safety 제어
 
 ## 관련 GitHub 및 버전
 
-- **민준님 원본 저장소:** 정확한 GitHub 주소 확인 후 추가 예정
+- **민준님 원본 저장소:** https://github.com/mnjn00/Uniconlab-autonomous-wheelchair
 - **팀 전체 휠체어 저장소:** https://github.com/Dannythechampion/UNICON_wheelchair_v2
 - **팀에서 사용하는 FF–PID 브랜치:** https://github.com/Dannythechampion/UNICON_wheelchair_v2/tree/feature/ffpid
 - **개인 FF–PID 저장소(현재 저장소):** https://github.com/Iamshy95/UNICON_wheelchair_PID
